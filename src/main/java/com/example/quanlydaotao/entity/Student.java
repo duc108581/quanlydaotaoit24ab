@@ -11,6 +11,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 
 @Entity
 @Table(name = "students")
@@ -21,23 +22,19 @@ public class Student {
     @Column(name = "id")
     private UUID id;
 
-    @Column(name = "user_id")
+    @Column(name = "user_id", nullable = false)
     private UUID userId;
 
-    // Mã sinh viên
-    @Column(name = "code")
+    @Column(name = "code", length = 50, nullable = false)
     private String code;
 
-    // Họ và tên
-    @Column(name = "full_name")
+    @Column(name = "full_name", length = 255, nullable = false)
     private String fullName;
 
-    // Email - cột vừa bổ sung trong database
-    @Column(name = "email")
+    @Column(name = "email", length = 254)
     private String email;
 
-    // Số điện thoại - cột vừa bổ sung trong database
-    @Column(name = "phone")
+    @Column(name = "phone", length = 20)
     private String phone;
 
     @Column(name = "date_of_birth")
@@ -46,42 +43,41 @@ public class Student {
     @Column(name = "gender")
     private String gender;
 
-    @Column(name = "personal_identification_number")
+    @Column(name = "personal_identification_number", length = 20)
     private String personalIdentificationNumber;
 
     @Column(name = "date_of_issue")
     private LocalDate dateOfIssue;
 
-    @Column(name = "card_place")
+    @Column(name = "card_place", length = 255)
     private String cardPlace;
 
-    @Column(name = "address")
+    @Column(name = "address", length = 500)
     private String address;
 
-    @Column(name = "current_address")
+    @Column(name = "current_address", length = 500)
     private String currentAddress;
 
-    @Column(name = "academic_year_year")
-    private LocalDateTime academicYearYear;
-
-    @Column(name = "department_id")
+    @Transient
     private UUID departmentId;
 
-    @Column(name = "major_id")
+    @Transient
     private UUID majorId;
 
-    @Column(name = "training_program_id")
+    @Transient
     private UUID trainingProgramId;
 
-    @Column(name = "status_id")
+    @Transient
     private UUID statusId;
 
-    // ID lớp, không phải tên lớp
-    @Column(name = "student_classess_id")
+    @Transient
+    private String initialPassword;
+
+    @Column(name = "current_student_class_id", nullable = false)
     private UUID studentClassessId;
 
     @Column(name = "admission_year")
-    private LocalDateTime admissionYear;
+    private Short admissionYear;
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;
@@ -107,7 +103,6 @@ public class Student {
     public Student() {
     }
 
-    // ID
     public UUID getId() {
         return id;
     }
@@ -116,7 +111,6 @@ public class Student {
         this.id = id;
     }
 
-    // User ID
     public UUID getUserId() {
         return userId;
     }
@@ -125,7 +119,6 @@ public class Student {
         this.userId = userId;
     }
 
-    // Mã sinh viên
     public String getCode() {
         return code;
     }
@@ -134,7 +127,6 @@ public class Student {
         this.code = code;
     }
 
-    // Họ và tên
     public String getFullName() {
         return fullName;
     }
@@ -143,7 +135,6 @@ public class Student {
         this.fullName = fullName;
     }
 
-    // Tương thích với code cũ dùng studentCode
     public String getStudentCode() {
         return code;
     }
@@ -152,7 +143,6 @@ public class Student {
         this.code = studentCode;
     }
 
-    // Tương thích với code cũ dùng name
     public String getName() {
         return fullName;
     }
@@ -161,7 +151,6 @@ public class Student {
         this.fullName = name;
     }
 
-    // Email
     public String getEmail() {
         return email;
     }
@@ -170,7 +159,6 @@ public class Student {
         this.email = email;
     }
 
-    // Số điện thoại
     public String getPhone() {
         return phone;
     }
@@ -179,7 +167,6 @@ public class Student {
         this.phone = phone;
     }
 
-    // Ngày sinh
     public LocalDate getDateOfBirth() {
         return dateOfBirth;
     }
@@ -188,7 +175,6 @@ public class Student {
         this.dateOfBirth = dateOfBirth;
     }
 
-    // Giới tính
     public String getGender() {
         return gender;
     }
@@ -197,7 +183,6 @@ public class Student {
         this.gender = gender;
     }
 
-    // Số CCCD
     public String getPersonalIdentificationNumber() {
         return personalIdentificationNumber;
     }
@@ -207,7 +192,6 @@ public class Student {
         this.personalIdentificationNumber = personalIdentificationNumber;
     }
 
-    // Ngày cấp CCCD
     public LocalDate getDateOfIssue() {
         return dateOfIssue;
     }
@@ -216,7 +200,6 @@ public class Student {
         this.dateOfIssue = dateOfIssue;
     }
 
-    // Nơi cấp CCCD
     public String getCardPlace() {
         return cardPlace;
     }
@@ -225,7 +208,6 @@ public class Student {
         this.cardPlace = cardPlace;
     }
 
-    // Địa chỉ
     public String getAddress() {
         return address;
     }
@@ -234,21 +216,12 @@ public class Student {
         this.address = address;
     }
 
-    // Địa chỉ hiện tại
     public String getCurrentAddress() {
         return currentAddress;
     }
 
     public void setCurrentAddress(String currentAddress) {
         this.currentAddress = currentAddress;
-    }
-
-    public LocalDateTime getAcademicYearYear() {
-        return academicYearYear;
-    }
-
-    public void setAcademicYearYear(LocalDateTime academicYearYear) {
-        this.academicYearYear = academicYearYear;
     }
 
     public UUID getDepartmentId() {
@@ -283,7 +256,14 @@ public class Student {
         this.statusId = statusId;
     }
 
-    // Lớp
+    public String getInitialPassword() {
+        return initialPassword;
+    }
+
+    public void setInitialPassword(String initialPassword) {
+        this.initialPassword = initialPassword;
+    }
+
     public UUID getStudentClassessId() {
         return studentClassessId;
     }
@@ -292,11 +272,11 @@ public class Student {
         this.studentClassessId = studentClassessId;
     }
 
-    public LocalDateTime getAdmissionYear() {
+    public Short getAdmissionYear() {
         return admissionYear;
     }
 
-    public void setAdmissionYear(LocalDateTime admissionYear) {
+    public void setAdmissionYear(Short admissionYear) {
         this.admissionYear = admissionYear;
     }
 

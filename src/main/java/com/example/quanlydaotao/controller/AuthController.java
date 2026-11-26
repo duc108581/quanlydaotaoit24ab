@@ -1,57 +1,53 @@
 package com.example.quanlydaotao.controller;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.security.SecureRandom;
-import java.util.Base64;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
-import org.springframework.dao.DataAccessException;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.util.StringUtils;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestAttribute;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
-import javax.crypto.SecretKeyFactory;
-import javax.crypto.spec.PBEKeySpec;
-
-import com.example.quanlydaotao.entity.Student;
-import com.example.quanlydaotao.repository.StudentRepository;
 import com.example.quanlydaotao.service.JwtTokenService;
 import com.example.quanlydaotao.service.JwtTokenService.AuthenticatedUser;
 import com.example.quanlydaotao.service.JwtTokenService.SessionTokens;
+import com.example.quanlydaotao.service.PasswordHasher;
+import com.example.quanlydaotao.service.UserAccountProvisioningService;
 
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {
 
     private final JdbcTemplate jdbcTemplate;
-    private final StudentRepository studentRepository;
     private final JwtTokenService sessions;
+    private final PasswordHasher passwordHasher;
+    private final UserAccountProvisioningService accountProvisioningService;
     private final Map<String, String> resetTokens = new java.util.concurrent.ConcurrentHashMap<>();
 
     public AuthController(
             JdbcTemplate jdbcTemplate,
-            StudentRepository studentRepository,
             JwtTokenService sessions,
-            @Value("${app.auth.initialize-schema:true}") boolean initializeSchema,
-            @Value("${app.auth.initial-admin-password}") String initialAdminPassword) {
+            PasswordHasher passwordHasher,
+            UserAccountProvisioningService accountProvisioningService) {
         this.jdbcTemplate = jdbcTemplate;
-        this.studentRepository = studentRepository;
         this.sessions = sessions;
-        if (initializeSchema) {
-            ensureAccountsSchema(initialAdminPassword);
-        }
+        this.passwordHasher = passwordHasher;
+        this.accountProvisioningService = accountProvisioningService;
     }
 
     @PostMapping("/login")
@@ -79,62 +75,6 @@ public class AuthController {
         return ResponseEntity.ok(sessionResponse(user, tokens));
     }
 
-    @PostMapping("/register")
-    public ResponseEntity<Map<String, String>> register(@RequestBody Map<String, String> request) {
-        if (request == null) {
-            return ResponseEntity.badRequest().body(Map.of("message", "Thiếu thông tin đăng ký."));
-        }
-        String username = value(request, "username").trim();
-        String fullName = value(request, "fullName").trim();
-        String email = value(request, "email").trim();
-        String studentCode = value(request, "studentCode").trim();
-        String password = value(request, "password");
-
-        if (username.length() < 3 || username.length() > 100
-                || fullName.isBlank() || email.isBlank() || studentCode.isBlank()
-                || !email.contains("@") || password.length() < 12 || password.length() > 72) {
-            return ResponseEntity.badRequest().body(Map.of(
-                    "message", "Thông tin không hợp lệ; mật khẩu cần từ 12 đến 72 ký tự."));
-        }
-
-        Student student = studentRepository.findByCodeIgnoreCaseAndDeletedAtIsNull(studentCode)
-                .filter(candidate -> !Boolean.FALSE.equals(candidate.getIsActive()))
-                .orElse(null);
-        if (student == null
-                || !fullName.equalsIgnoreCase(student.getFullName() == null ? "" : student.getFullName().trim())
-                || !StringUtils.hasText(student.getEmail())
-                || !email.equalsIgnoreCase(student.getEmail().trim())) {
-            return ResponseEntity.badRequest().body(Map.of(
-                    "message", "Không tìm thấy hồ sơ sinh viên khớp với mã, họ tên và email."));
-        }
-
-        try {
-            Integer duplicateCount = jdbcTemplate.queryForObject("""
-                    SELECT COUNT(*)
-                    FROM users
-                    WHERE LOWER(username) = LOWER(?)
-                       OR LOWER(email) = LOWER(?)
-                       OR LOWER(student_code) = LOWER(?)
-                    """, Integer.class, username, email, studentCode);
-            if (duplicateCount != null && duplicateCount > 0) {
-                return ResponseEntity.status(HttpStatus.CONFLICT)
-                        .body(Map.of("message", "Tên đăng nhập, email hoặc mã sinh viên đã được sử dụng."));
-            }
-            jdbcTemplate.update("""
-                    INSERT INTO users
-                        (id, username, password_hash, full_name, email, student_code, role_name, is_active, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, 'STUDENT', 1, CURRENT_TIMESTAMP)
-                    """,
-                    UUID.randomUUID(), username, hashPassword(password), student.getFullName(),
-                    email, student.getCode());
-        } catch (DataAccessException e) {
-            throw new IllegalStateException("Không thể tạo tài khoản sinh viên.", e);
-        }
-
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(Map.of("message", "Đăng ký tài khoản thành công. Vui lòng đăng nhập."));
-    }
-
     @GetMapping("/me")
     public ResponseEntity<Map<String, Object>> me(
             @RequestHeader(value = "Authorization", required = false) String authorization) {
@@ -147,8 +87,242 @@ public class AuthController {
                 "id", user.id(),
                 "username", user.username(),
                 "fullName", user.fullName(),
-                "roles", List.of(user.role())
+                "roles", user.roles()
         ));
+    }
+
+    @PostMapping("/accounts")
+    @Transactional
+    public ResponseEntity<Map<String, Object>> provisionAccount(
+            @RequestBody Map<String, Object> request,
+            @RequestAttribute("authenticatedUser") AuthenticatedUser administrator) {
+        String username = textValue(request.get("username"));
+        String displayName = textValue(request.get("displayName"));
+        String password = textValue(request.get("password"));
+        List<String> roles = roleValues(request.get("roles"));
+        if (username == null || username.length() < 3 || username.length() > 100
+                || displayName == null || displayName.length() > 255
+                || password == null || password.length() < 12 || password.length() > 72
+                    || roles.isEmpty()
+                    || request.containsKey("email")) {
+            return ResponseEntity.badRequest().body(Map.of(
+                        "message", "Username, displayName, mật khẩu hợp lệ và ít nhất một role là bắt buộc; email được lưu trong hồ sơ sinh viên hoặc nhân viên."));
+        }
+        if (roles.stream().anyMatch(role -> List.of("STUDENT", "LECTURER").contains(role))) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "message", "Tài khoản STUDENT và LECTURER phải được tạo cùng hồ sơ tương ứng."));
+        }
+
+        UUID userId = accountProvisioningService.createAccount(username, displayName, password, roles);
+        return ResponseEntity.status(HttpStatus.CREATED).body(Map.of(
+                "id", userId,
+                "username", username,
+                "displayName", displayName,
+                "roles", roles));
+    }
+
+    @GetMapping("/accounts")
+    public List<Map<String, Object>> getAccounts() {
+        List<AccountQueryRow> rows = jdbcTemplate.query("""
+                SELECT account.id, account.username, account.display_name,
+                       COALESCE(student.email, employee.email) AS email,
+                       student.id AS student_id, lecturer.id AS lecturer_id,
+                       account.is_active, assigned.code AS role_code
+                FROM users account
+                LEFT JOIN students student
+                  ON student.user_id = account.id
+                 AND student.deleted_at IS NULL
+                LEFT JOIN employees employee
+                  ON employee.user_id = account.id
+                 AND employee.deleted_at IS NULL
+                LEFT JOIN lecturers lecturer
+                  ON lecturer.id = employee.id
+                 AND lecturer.deleted_at IS NULL
+                LEFT JOIN user_roles assignedRole ON assignedRole.user_id = account.id
+                LEFT JOIN roles assigned ON assigned.id = assignedRole.role_id
+                ORDER BY account.username, assigned.code
+                """, (rs, rowNum) -> new AccountQueryRow(
+                rs.getObject("id", UUID.class),
+                rs.getString("username"),
+                rs.getString("display_name"),
+                rs.getString("email"),
+                rs.getObject("student_id", UUID.class),
+                rs.getObject("lecturer_id", UUID.class),
+                rs.getBoolean("is_active"),
+                rs.getString("role_code")));
+
+        Map<UUID, Map<String, Object>> accounts = new LinkedHashMap<>();
+        Map<UUID, LinkedHashSet<String>> rolesByAccount = new LinkedHashMap<>();
+        for (AccountQueryRow row : rows) {
+            accounts.computeIfAbsent(row.id(), id -> {
+                Map<String, Object> account = new LinkedHashMap<>();
+                account.put("id", id);
+                account.put("username", row.username());
+                account.put("fullName", row.displayName() == null ? row.username() : row.displayName());
+                account.put("email", row.email());
+                account.put("studentId", row.studentId());
+                account.put("lecturerId", row.lecturerId());
+                account.put("isActive", row.isActive());
+                return account;
+            });
+            if (row.roleCode() != null) {
+                rolesByAccount.computeIfAbsent(row.id(), id -> new LinkedHashSet<>())
+                        .add(normalizeRole(row.roleCode()));
+            }
+        }
+        accounts.forEach((id, account) ->
+                account.put("roles", String.join(",", rolesByAccount.getOrDefault(id, new LinkedHashSet<>()))));
+        return new ArrayList<>(accounts.values());
+    }
+
+    @GetMapping("/roles")
+    public List<String> getActiveRoles() {
+        return jdbcTemplate.query("""
+                SELECT code
+                FROM roles
+                WHERE is_active = 1
+                ORDER BY code
+                """, (rs, rowNum) -> normalizeRole(rs.getString("code")));
+    }
+
+    @PatchMapping("/accounts/{id}/status")
+    public ResponseEntity<Map<String, String>> updateAccountStatus(
+            @PathVariable UUID id,
+            @RequestBody Map<String, Object> request) {
+        Object activeValue = request.get("active");
+        if (!(activeValue instanceof Boolean active)) {
+            return ResponseEntity.badRequest().body(Map.of("message", "Trạng thái active phải là true hoặc false."));
+        }
+        Integer accountCount = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM users WHERE id = ?", Integer.class, id);
+        if (accountCount == null || accountCount == 0) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy tài khoản.");
+        }
+        if (!active && isActiveAdministrator(id)) {
+            Integer otherActiveAdmins = jdbcTemplate.queryForObject("""
+                    SELECT COUNT(DISTINCT account.id)
+                    FROM users account
+                    JOIN user_roles assignedRole ON assignedRole.user_id = account.id
+                    JOIN roles assigned ON assigned.id = assignedRole.role_id
+                    WHERE account.is_active = 1
+                      AND assigned.is_active = 1
+                      AND assigned.code = N'ADMIN'
+                      AND account.id <> ?
+                    """, Integer.class, id);
+            if (otherActiveAdmins == null || otherActiveAdmins == 0) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT, "Không thể khóa ADMIN cuối cùng đang hoạt động.");
+            }
+        }
+        jdbcTemplate.update("""
+                UPDATE users
+                SET is_active = ?, updated_at = ?
+                WHERE id = ?
+                """, active, java.sql.Timestamp.from(java.time.Instant.now()), id);
+        return ResponseEntity.ok(Map.of("message", "Đã cập nhật trạng thái tài khoản."));
+    }
+
+    @PatchMapping("/accounts/{id}/roles")
+    @Transactional
+    public ResponseEntity<Map<String, String>> updateAccountRoles(
+            @PathVariable UUID id,
+            @RequestBody Map<String, Object> request) {
+        List<String> roles = roleValues(request.get("roles"));
+        if (roles.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("message", "Phải chọn ít nhất một role."));
+        }
+        Integer accountCount = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM users WHERE id = ?", Integer.class, id);
+        if (accountCount == null || accountCount == 0) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy tài khoản.");
+        }
+
+        boolean hasStudentProfile = hasProfile("students", "user_id", id);
+        boolean hasLecturerProfile = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM employees employee
+                JOIN lecturers lecturer ON lecturer.id = employee.id
+                WHERE employee.user_id = ?
+                  AND employee.deleted_at IS NULL
+                  AND lecturer.deleted_at IS NULL
+                """, Integer.class, id) > 0;
+        if ((hasStudentProfile && !roles.contains("STUDENT"))
+                || (hasLecturerProfile && !roles.contains("LECTURER"))
+                || (roles.contains("STUDENT") && !hasStudentProfile)
+                || (roles.contains("LECTURER") && !hasLecturerProfile)) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "message", "Role STUDENT/LECTURER phải khớp với hồ sơ tương ứng."));
+        }
+        if (!roles.contains("ADMIN") && isActiveAdministrator(id)) {
+            Integer otherActiveAdmins = jdbcTemplate.queryForObject("""
+                    SELECT COUNT(DISTINCT account.id)
+                    FROM users account
+                    JOIN user_roles assignedRole ON assignedRole.user_id = account.id
+                    JOIN roles assigned ON assigned.id = assignedRole.role_id
+                    WHERE account.is_active = 1
+                      AND assigned.is_active = 1
+                      AND assigned.code = N'ADMIN'
+                      AND account.id <> ?
+                    """, Integer.class, id);
+            if (otherActiveAdmins == null || otherActiveAdmins == 0) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT, "Không thể gỡ role ADMIN khỏi ADMIN cuối cùng đang hoạt động.");
+            }
+        }
+
+        List<UUID> roleIds = new ArrayList<>();
+        for (String role : roles) {
+            List<UUID> matches = jdbcTemplate.query("""
+                    SELECT id
+                    FROM roles
+                    WHERE code = ?
+                      AND is_active = 1
+                    """, (rs, rowNum) -> rs.getObject("id", UUID.class), role);
+            if (matches.size() != 1) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Role không tồn tại hoặc đã bị khóa.");
+            }
+            roleIds.add(matches.get(0));
+        }
+
+        jdbcTemplate.update("DELETE FROM user_roles WHERE user_id = ?", id);
+        for (UUID roleId : roleIds) {
+            jdbcTemplate.update("""
+                    INSERT INTO user_roles (id, user_id, role_id)
+                    VALUES (?, ?, ?)
+                    """, UUID.randomUUID(), id, roleId);
+        }
+        return ResponseEntity.ok(Map.of("message", "Đã cập nhật phân quyền tài khoản."));
+    }
+
+    @PostMapping("/accounts/{id}/password")
+    public ResponseEntity<Map<String, String>> resetAccountPassword(
+            @PathVariable UUID id,
+            @RequestBody Map<String, String> request) {
+        String password = request.getOrDefault("password", "");
+        if (password.length() < 12 || password.length() > 72) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("message", "Mật khẩu cần từ 12 đến 72 ký tự."));
+        }
+        int updated = jdbcTemplate.update("""
+                UPDATE users
+                SET password_hash = ?, updated_at = ?
+                WHERE id = ?
+                """, passwordHasher.hash(password), java.sql.Timestamp.from(java.time.Instant.now()), id);
+        if (updated != 1) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy tài khoản.");
+        }
+        return ResponseEntity.ok(Map.of("message", "Đã đổi mật khẩu tài khoản."));
+    }
+
+    @GetMapping("/independent-roles")
+    public List<String> independentAccountRoles() {
+        return jdbcTemplate.query("""
+                SELECT code
+                FROM roles
+                WHERE is_active = 1
+                  AND code NOT IN (N'STUDENT', N'LECTURER')
+                ORDER BY code
+                """, (rs, rowNum) -> normalizeRole(rs.getString("code")));
     }
 
     @PostMapping("/logout")
@@ -179,122 +353,140 @@ public class AuthController {
             return ResponseEntity.badRequest()
                     .body(Map.of("message", "Mã đặt lại không hợp lệ hoặc mật khẩu cần từ 12 đến 72 ký tự."));
         }
-        String passwordHash = hashPassword(password);
-        jdbcTemplate.update("""
-                UPDATE dbo.users
-                SET password_hash = ?, updated_at = SYSUTCDATETIME()
-                WHERE username = ? OR email = ? OR student_code = ? OR lecturer_code = ?
-                """, passwordHash, identifier, identifier, identifier, identifier);
+        List<UUID> accounts = jdbcTemplate.query("""
+                SELECT id
+                FROM users
+                WHERE username = ?
+                   OR id IN (
+                       SELECT student.user_id
+                       FROM students student
+                       WHERE student.email = ?
+                         AND student.user_id IS NOT NULL
+                       UNION
+                       SELECT employee.user_id
+                       FROM employees employee
+                       WHERE employee.email = ?
+                         AND employee.user_id IS NOT NULL
+                   )
+                """, (rs, rowNum) -> rs.getObject("id", UUID.class),
+                identifier, identifier, identifier);
+        if (accounts.size() != 1) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("message", "Không tìm thấy tài khoản duy nhất tương ứng với thông tin đặt lại."));
+        }
+        String passwordHash = passwordHasher.hash(password);
+        int updated = jdbcTemplate.update("""
+                UPDATE users
+                SET password_hash = ?, updated_at = ?
+                WHERE id = ?
+                """, passwordHash, java.sql.Timestamp.from(java.time.Instant.now()), accounts.get(0));
+        if (updated != 1) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("message", "Không thể cập nhật mật khẩu cho tài khoản."));
+        }
         return ResponseEntity.ok(Map.of("message", "Đặt lại mật khẩu thành công."));
     }
 
     private AuthenticatedUser findDatabaseUser(String username, String password) {
         List<DatabaseUser> rows = jdbcTemplate.query("""
-                SELECT id, username, password_hash, full_name, role_name, student_code
-                FROM users
-                WHERE is_active = 1
-                  AND (LOWER(username) = LOWER(?)
-                    OR LOWER(email) = LOWER(?)
-                    OR LOWER(student_code) = LOWER(?)
-                    OR LOWER(lecturer_code) = LOWER(?))
+                SELECT TOP (1) account.id, account.username, account.password_hash,
+                       account.display_name,
+                       COALESCE(student.code, employee.employee_code) AS profile_code
+                FROM users account
+                LEFT JOIN students student ON student.user_id = account.id
+                LEFT JOIN employees employee ON employee.user_id = account.id
+                WHERE account.is_active = 1
+                  AND (account.username = ?
+                    OR student.email = ?
+                    OR employee.email = ?
+                    OR student.code = ?
+                    OR employee.employee_code = ?)
                 """, (rs, rowNum) -> new DatabaseUser(
                 rs.getString("id"),
                 rs.getString("username"),
                 rs.getString("password_hash"),
-                rs.getString("full_name"),
-                rs.getString("role_name"),
-                rs.getString("student_code")), username, username, username, username);
+                rs.getString("display_name"),
+                rs.getString("profile_code")), username, username, username, username, username);
         if (rows.isEmpty()) {
             return null;
         }
         DatabaseUser row = rows.get(0);
-        if (!verifyPassword(password, row.passwordHash())) {
+        List<String> roles = loadRoleCodes(row.id());
+        if (roles.isEmpty() || !passwordHasher.matches(password, row.passwordHash())) {
             return null;
         }
         return new AuthenticatedUser(
-                row.id() == null ? UUID.randomUUID().toString() : row.id(),
+                row.id(),
                 row.username(),
-                row.fullName() == null ? row.username() : row.fullName(),
-                normalizeRole(row.role()),
-                row.studentCode()
+                row.displayName() == null ? row.username() : row.displayName(),
+                roles,
+                row.profileCode()
         );
     }
 
-    private void ensureAccountsSchema(String initialAdminPassword) {
-        jdbcTemplate.execute("""
-                    IF OBJECT_ID(N'dbo.users', N'U') IS NULL
-                    BEGIN
-                        CREATE TABLE dbo.users (
-                            id UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
-                            username NVARCHAR(100) NOT NULL UNIQUE,
-                            password_hash NVARCHAR(255) NOT NULL,
-                            full_name NVARCHAR(255) NULL,
-                            email NVARCHAR(255) NULL,
-                            student_code NVARCHAR(100) NULL,
-                            lecturer_code NVARCHAR(100) NULL,
-                            role_name NVARCHAR(50) NOT NULL DEFAULT 'STUDENT',
-                            is_active BIT NOT NULL DEFAULT 1,
-                            created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
-                            updated_at DATETIME2 NULL
-                        );
-                    END;
-                    """);
-        jdbcTemplate.update("""
-                    IF NOT EXISTS (SELECT 1 FROM dbo.users WHERE LOWER(username) = 'admin')
-                    BEGIN
-                        INSERT INTO dbo.users (username, password_hash, full_name, role_name, is_active)
-                        VALUES ('admin', ?, 'Administrator', 'ADMIN', 1);
-                    END;
-                    """, hashPassword(initialAdminPassword));
-    }
-
-    private boolean verifyPassword(String password, String storedHash) {
-        if (storedHash == null) {
-            return false;
-        }
-        if (!storedHash.startsWith("pbkdf2$")) {
-            return MessageDigest.isEqual(
-                    storedHash.getBytes(StandardCharsets.UTF_8),
-                    password.getBytes(StandardCharsets.UTF_8));
-        }
-        try {
-            String[] parts = storedHash.split("\\$", 4);
-            byte[] salt = Base64.getDecoder().decode(parts[2]);
-            byte[] expected = Base64.getDecoder().decode(parts[3]);
-            PBEKeySpec spec = new PBEKeySpec(password.toCharArray(), salt, 120000, 256);
-            byte[] actual = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-                    .generateSecret(spec)
-                    .getEncoded();
-            return MessageDigest.isEqual(expected, actual);
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
-    private String hashPassword(String password) throws DataAccessException {
-        try {
-            byte[] salt = new byte[16];
-            new SecureRandom().nextBytes(salt);
-            PBEKeySpec spec = new PBEKeySpec(password.toCharArray(), salt, 120000, 256);
-            byte[] hash = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-                    .generateSecret(spec)
-                    .getEncoded();
-            return "pbkdf2$120000$" + Base64.getEncoder().encodeToString(salt) + "$"
-                    + Base64.getEncoder().encodeToString(hash);
-        } catch (NoSuchAlgorithmException | java.security.spec.InvalidKeySpecException e) {
-            throw new IllegalStateException("Cannot hash password", e);
-        }
+    private List<String> loadRoleCodes(String userId) {
+        return jdbcTemplate.query("""
+                SELECT r.code
+                FROM user_roles ur
+                JOIN roles r ON r.id = ur.role_id
+                WHERE ur.user_id = ?
+                  AND r.is_active = 1
+                ORDER BY r.code
+                """, (rs, rowNum) -> normalizeRole(rs.getString("code")), userId);
     }
 
     private String normalizeRole(String role) {
-        if (role == null) {
-            return "STUDENT";
-        }
-        return role.toUpperCase();
+        return role.toUpperCase(Locale.ROOT);
     }
 
-    private String value(Map<String, String> request, String key) {
-        return request.getOrDefault(key, "");
+    private boolean hasProfile(String table, String userIdColumn, UUID id) {
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM " + table + " WHERE " + userIdColumn + " = ? AND deleted_at IS NULL",
+                Integer.class, id);
+        return count != null && count > 0;
+    }
+
+    private boolean isActiveAdministrator(UUID id) {
+        Integer count = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM users account
+                JOIN user_roles assignedRole ON assignedRole.user_id = account.id
+                JOIN roles assigned ON assigned.id = assignedRole.role_id
+                WHERE account.id = ?
+                  AND account.is_active = 1
+                  AND assigned.is_active = 1
+                  AND assigned.code = N'ADMIN'
+                """, Integer.class, id);
+        return count != null && count > 0;
+    }
+
+    private record AccountQueryRow(
+            UUID id,
+            String username,
+            String displayName,
+            String email,
+            UUID studentId,
+            UUID lecturerId,
+            boolean isActive,
+            String roleCode) {
+    }
+
+    private String textValue(Object value) {
+        if (value == null) return null;
+        String text = value.toString().trim();
+        return text.isEmpty() ? null : text;
+    }
+
+    private List<String> roleValues(Object value) {
+        if (!(value instanceof List<?> values)) return List.of();
+        return values.stream()
+                .filter(String.class::isInstance)
+                .map(String.class::cast)
+                .map(String::trim)
+                .filter(role -> !role.isEmpty())
+                .map(this::normalizeRole)
+                .distinct()
+                .toList();
     }
 
     private Map<String, Object> sessionResponse(AuthenticatedUser user, SessionTokens tokens) {
@@ -307,7 +499,7 @@ public class AuthController {
                         "id", user.id(),
                         "username", user.username(),
                         "fullName", user.fullName(),
-                        "roles", List.of(user.role())
+                        "roles", user.roles()
                 ));
     }
 
@@ -315,8 +507,7 @@ public class AuthController {
             String id,
             String username,
             String passwordHash,
-            String fullName,
-            String role,
-            String studentCode) {
+            String displayName,
+            String profileCode) {
     }
 }

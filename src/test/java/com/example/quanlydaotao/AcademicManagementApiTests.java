@@ -3,7 +3,6 @@ package com.example.quanlydaotao;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
@@ -11,7 +10,9 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
@@ -19,6 +20,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
 import com.example.quanlydaotao.entity.Course;
@@ -27,6 +29,7 @@ import com.example.quanlydaotao.entity.StudentStatus;
 import com.example.quanlydaotao.repository.CourseRepository;
 import com.example.quanlydaotao.repository.CourseSectionRepository;
 import com.example.quanlydaotao.repository.StudentStatusRepository;
+import com.example.quanlydaotao.repository.StudentStatusHistoryRepository;
 import com.example.quanlydaotao.service.JwtTokenService;
 import com.example.quanlydaotao.service.JwtTokenService.AuthenticatedUser;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -48,18 +51,74 @@ class AcademicManagementApiTests {
     private StudentStatusRepository studentStatusRepository;
 
     @Autowired
+    private StudentStatusHistoryRepository studentStatusHistoryRepository;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    @Autowired
     private JwtTokenService jwtTokenService;
 
     @Value("${local.server.port}")
     private int port;
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
+    private final Map<String, String> studentAccountIds = new HashMap<>();
     private String adminToken;
 
     @BeforeEach
     void createAdminAccessToken() {
+        jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id UUID PRIMARY KEY,
+                    username VARCHAR(100) NOT NULL UNIQUE,
+                    password_hash VARCHAR(255) NOT NULL,
+                    display_name VARCHAR(255),
+                    email VARCHAR(254),
+                    is_active INTEGER NOT NULL,
+                    created_at TIMESTAMP,
+                    updated_at TIMESTAMP
+                )
+                """);
+        jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS roles (
+                    id UUID PRIMARY KEY,
+                    code VARCHAR(50) NOT NULL UNIQUE,
+                    is_active INTEGER NOT NULL
+                )
+                """);
+        jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS user_roles (
+                    id UUID PRIMARY KEY,
+                    user_id UUID NOT NULL,
+                    role_id UUID NOT NULL,
+                    UNIQUE (user_id, role_id)
+                )
+                """);
+        jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS grading_scales (
+                    id UUID PRIMARY KEY,
+                    is_active INTEGER NOT NULL,
+                    deleted_at TIMESTAMP
+                )
+                """);
+        jdbcTemplate.update("""
+                MERGE INTO roles (id, code, is_active)
+                KEY (code)
+                VALUES (?, 'STUDENT', 1)
+                """, UUID.nameUUIDFromBytes("STUDENT".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        jdbcTemplate.update("""
+                MERGE INTO roles (id, code, is_active)
+                KEY (code)
+                VALUES (?, 'ADMIN', 1)
+                """, UUID.nameUUIDFromBytes("ADMIN".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        jdbcTemplate.update("""
+                MERGE INTO roles (id, code, is_active)
+                KEY (code)
+                VALUES (?, 'LECTURER', 1)
+                """, UUID.nameUUIDFromBytes("LECTURER".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
         adminToken = jwtTokenService.issueAccessToken(new AuthenticatedUser(
-                UUID.randomUUID().toString(), "test-admin", "Test Admin", "ADMIN", null));
+                UUID.randomUUID().toString(), "test-admin", "Test Admin", List.of("ADMIN"), null));
     }
 
     @Test
@@ -118,12 +177,13 @@ class AcademicManagementApiTests {
                     {"code":"CLASS-SEED-%s","name":"Seed student class","academicYearId":"%s","departmentId":"%s","majorId":"%s","trainingProgramId":"%s"}
                     """.formatted(suffix, academicYearId, departmentId, majorId, trainingProgramId), cleanupUrls);
             lecturerId = create("/api/lecturers", """
-                    {"lecturerCode":"GV-SEED-%s","fullName":"Seed Lecturer","departmentId":"%s"}
+                    {"lecturerCode":"GV-SEED-%s","fullName":"Seed Lecturer","departmentId":"%s","initialPassword":"initial-password-123"}
                     """.formatted(suffix, departmentId), cleanupUrls);
 
             Course course = new Course();
             course.setCode("COURSE-SEED-" + suffix);
             course.setName("Seed course");
+            course.setCredits(new java.math.BigDecimal("3.00"));
             courseId = courseRepository.save(course).getId().toString();
 
             schoolYearId = create("/api/school-years", """
@@ -132,16 +192,35 @@ class AcademicManagementApiTests {
             semesterId = create("/api/semesters", """
                     {"code":"SEED-%s","name":"Seed semester","schoolYearId":"%s","startDate":"2025-08-01","endDate":"2025-12-31"}
                     """.formatted(suffix, schoolYearId), cleanupUrls);
+            UUID gradingScaleId = UUID.randomUUID();
+            jdbcTemplate.update("INSERT INTO grading_scales (id, is_active) VALUES (?, 1)", gradingScaleId);
             courseSectionId = create("/api/course-sections", """
-                    {"code":"SEED-%s","name":"Seed section","courseId":"%s","semesterId":"%s","status":"open"}
-                    """.formatted(suffix, courseId, semesterId), cleanupUrls);
+                    {"code":"SEED-%s","name":"Seed section","courseId":"%s","semesterId":"%s","gradingScaleId":"%s","status":"DRAFT"}
+                    """.formatted(suffix, courseId, semesterId, gradingScaleId), cleanupUrls);
+            String assignmentId = create("/api/lecturer-course-classes", """
+                    {"lecturerId":"%s","courseSectionId":"%s","role":"PRIMARY"}
+                    """.formatted(lecturerId, courseSectionId), cleanupUrls);
+            HttpResponse<String> openSection = send(
+                    "http://localhost:" + port + "/api/course-sections/" + courseSectionId, "PUT", """
+                    {"code":"SEED-%s","name":"Seed section","courseId":"%s","semesterId":"%s","gradingScaleId":"%s","status":"OPEN"}
+                    """.formatted(suffix, courseId, semesterId, gradingScaleId));
+            assertEquals(200, openSection.statusCode(), openSection.body());
             String studentCode = "SV" + (10_000_000 + Math.floorMod(suffix.hashCode(), 90_000_000));
             studentId = create("/api/students", """
-                    {"code":"%s","fullName":"Test Student","studentClassessId":"%s"}
+                    {"code":"%s","fullName":"Test Student","studentClassessId":"%s","initialPassword":"initial-password-123"}
                     """.formatted(studentCode, studentClassId), cleanupUrls, 200);
+            JsonNode createdStudent = objectMapper.readTree(send(
+                    "http://localhost:" + port + "/api/students/" + studentId, "GET", null).body());
+            assertNotNull(createdStudent.path("userId").asText());
+            assertEquals(1, jdbcTemplate.queryForObject("""
+                    SELECT COUNT(*)
+                    FROM user_roles assigned
+                    JOIN roles role ON role.id = assigned.role_id
+                    WHERE assigned.user_id = ?
+                      AND role.code = 'STUDENT'
+                    """, Integer.class, UUID.fromString(createdStudent.path("userId").asText())));
 
             StudentStatus statusTemplate = new StudentStatus();
-            statusTemplate.setStudentId(UUID.fromString(studentId));
             statusTemplate.setCode("STATUS-" + suffix);
             statusTemplate.setName("Active");
             templateStatusId = studentStatusRepository.save(statusTemplate).getId().toString();
@@ -151,18 +230,19 @@ class AcademicManagementApiTests {
             assertEquals(200, statusOptions.statusCode());
             assertTrue(containsId(statusOptions.body(), templateStatusId), statusOptions.body());
 
+            String studentWithStatusAccount = createStudentAccount("status-" + suffix, "Student With Status");
             HttpResponse<String> studentWithStatus = send("http://localhost:" + port + "/api/students", "POST", """
-                    {"code":"SV%d","fullName":"Student With Status","studentClassessId":"%s","statusId":"%s"}
-                    """.formatted(900_000_000 + Math.floorMod(suffix.hashCode(), 99_999_999),
+                    {"userId":"%s","code":"SV%d","fullName":"Student With Status","studentClassessId":"%s","statusId":"%s"}
+                    """.formatted(studentWithStatusAccount,
+                            900_000_000 + Math.floorMod(suffix.hashCode(), 99_999_999),
                             studentClassId, templateStatusId));
             assertEquals(200, studentWithStatus.statusCode(), studentWithStatus.body());
             JsonNode studentWithStatusJson = objectMapper.readTree(studentWithStatus.body());
             String statusStudentId = studentWithStatusJson.path("id").asText();
             assignedStatusId = studentWithStatusJson.path("statusId").asText();
-            assertNotEquals(templateStatusId, assignedStatusId);
-            StudentStatus assignedStatus = studentStatusRepository.findById(UUID.fromString(assignedStatusId))
-                    .orElseThrow();
-            assertEquals(statusStudentId, assignedStatus.getStudentId().toString());
+            assertEquals(templateStatusId, assignedStatusId);
+            assertTrue(studentStatusHistoryRepository
+                    .findFirstByStudentIdAndCurrentTrue(UUID.fromString(statusStudentId)).isPresent());
             cleanupUrls.add("http://localhost:" + port + "/api/students/" + statusStudentId);
 
             List<String> endpoints = List.of(
@@ -176,8 +256,7 @@ class AcademicManagementApiTests {
                     "/api/semesters",
                     "/api/course-sections",
                     "/api/students",
-                    "/api/student-course-sections",
-                    "/api/lecturer-course-classes");
+                    "/api/student-course-sections");
 
             for (String endpoint : endpoints) {
                 String url = "http://localhost:" + port + endpoint;
@@ -205,6 +284,11 @@ class AcademicManagementApiTests {
                         section.setStatus(originalStatus);
                         courseSectionRepository.save(section);
                     }
+                    HttpResponse<String> restoredResponse = send(url, "POST", payload);
+                    assertEquals(201, restoredResponse.statusCode(), restoredResponse.body());
+                    JsonNode restored = objectMapper.readTree(restoredResponse.body());
+                    assertEquals(id, restored.path("id").asText());
+                    assertEquals(1, restored.path("attemptNumber").asInt());
                 }
 
                 HttpResponse<String> listResponse = send(url, "GET", null);
@@ -215,7 +299,8 @@ class AcademicManagementApiTests {
                         payloadFor(endpoint, suffix, academicYearId, departmentId, majorId, trainingProgramId,
                                 studentClassId, lecturerId, courseId, schoolYearId, semesterId, courseSectionId,
                                 studentId, false));
-                assertEquals(200, updateResponse.statusCode());
+                assertEquals(200, updateResponse.statusCode(),
+                        () -> "PUT " + endpoint + " failed: " + updateResponse.body());
                 assertFalse(objectMapper.readTree(updateResponse.body()).get("isActive").asBoolean());
 
                 HttpResponse<String> deleteResponse = send(url + "/" + id, "DELETE", null);
@@ -310,7 +395,7 @@ class AcademicManagementApiTests {
                     {"code":"CLASS-%s","name":"Test student class","academicYearId":"%s","departmentId":"%s","majorId":"%s","trainingProgramId":"%s","isActive":%s}
                     """.formatted(suffix, academicYearId, departmentId, majorId, trainingProgramId, isActive);
             case "/api/lecturers" -> """
-                    {"lecturerCode":"GV-%s","fullName":"Test Lecturer","departmentId":"%s","isActive":%s}
+                    {"lecturerCode":"GV-%s","fullName":"Test Lecturer","departmentId":"%s","initialPassword":"initial-password-123","isActive":%s}
                     """.formatted(suffix, departmentId, isActive);
             case "/api/school-years" -> """
                     {"code":"SY-TEST-%s","name":"2025-2026","startDate":"2025-08-01","endDate":"2026-07-31","isActive":%s}
@@ -319,11 +404,12 @@ class AcademicManagementApiTests {
                     {"code":"SEM-%s","name":"Test semester","schoolYearId":"%s","startDate":"2025-08-01","endDate":"2025-12-31","isActive":%s}
                     """.formatted(suffix, schoolYearId, isActive);
             case "/api/course-sections" -> """
-                    {"code":"CS-%s","name":"Test course section","courseId":"%s","semesterId":"%s","maxStudents":20,"minStudents":1,"status":"open","isActive":%s}
+                    {"code":"CS-%s","name":"Test course section","courseId":"%s","semesterId":"%s","status":"DRAFT","isActive":%s}
                     """.formatted(suffix, courseId, semesterId, isActive);
             case "/api/students" -> """
-                    {"code":"SV%s","fullName":"Test Student","studentClassessId":"%s","isActive":%s}
-                    """.formatted((10_000_000 + Math.floorMod(suffix.hashCode(), 90_000_000)) + 1,
+                    {"userId":"%s","code":"SV%s","fullName":"Test Student","studentClassessId":"%s","isActive":%s}
+                    """.formatted(createStudentAccount("loop-" + suffix, "Test Student"),
+                            (10_000_000 + Math.floorMod(suffix.hashCode(), 90_000_000)) + 1,
                             studentClassId, isActive);
             case "/api/student-course-sections" -> """
                     {"studentId":"%s","courseSectionId":"%s","registrationType":"first","status":"REGISTERED","isActive":%s}
@@ -343,6 +429,22 @@ class AcademicManagementApiTests {
             }
         }
         return false;
+    }
+
+    private String createStudentAccount(String key, String displayName) {
+        return studentAccountIds.computeIfAbsent(key, ignored -> {
+            UUID userId = UUID.randomUUID();
+            UUID studentRoleId = jdbcTemplate.queryForObject(
+                    "SELECT id FROM roles WHERE code = 'STUDENT'", UUID.class);
+            jdbcTemplate.update("""
+                    INSERT INTO users (id, username, password_hash, display_name, is_active, created_at)
+                    VALUES (?, ?, 'test-hash', ?, 1, CURRENT_TIMESTAMP)
+                    """, userId, "student-" + UUID.randomUUID(), displayName);
+            jdbcTemplate.update(
+                    "INSERT INTO user_roles (id, user_id, role_id) VALUES (?, ?, ?)",
+                    UUID.randomUUID(), userId, studentRoleId);
+            return userId.toString();
+        });
     }
 
     private HttpResponse<String> send(String url, String method, String body) throws Exception {

@@ -8,6 +8,8 @@ import java.time.ZoneOffset;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.Locale;
 import java.util.UUID;
 
 import javax.crypto.SecretKey;
@@ -59,20 +61,22 @@ public class JwtTokenService {
 
         String tokenHash = hashRefreshToken(refreshToken);
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
-        List<AuthenticatedUser> users = jdbcTemplate.query("""
-                SELECT u.id, u.username, u.full_name, u.role_name, u.student_code
+        List<RefreshUser> users = jdbcTemplate.query("""
+                SELECT u.id, u.username, u.display_name,
+                       COALESCE(student.code, employee.employee_code) AS profile_code
                 FROM refresh_tokens rt
                 JOIN users u ON u.id = rt.user_id
+                LEFT JOIN students student ON student.user_id = u.id
+                LEFT JOIN employees employee ON employee.user_id = u.id
                 WHERE rt.token_hash = ?
                   AND rt.revoked_at IS NULL
                   AND rt.expires_at > ?
                   AND u.is_active = 1
-                """, (rs, rowNum) -> new AuthenticatedUser(
-                rs.getString("id"),
-                rs.getString("username"),
-                rs.getString("full_name"),
-                normalizeRole(rs.getString("role_name")),
-                rs.getString("student_code")), tokenHash, java.sql.Timestamp.valueOf(now));
+                """, (rs, rowNum) -> new RefreshUser(
+                        rs.getString("id"),
+                        rs.getString("username"),
+                        rs.getString("display_name"),
+                        rs.getString("profile_code")), tokenHash, java.sql.Timestamp.valueOf(now));
         if (users.isEmpty()) {
             return null;
         }
@@ -87,7 +91,13 @@ public class JwtTokenService {
         if (revoked != 1) {
             return null;
         }
-        return createSession(users.get(0));
+        RefreshUser row = users.get(0);
+        List<String> roles = loadRoles(row.id());
+        if (roles.isEmpty()) {
+            return null;
+        }
+        return createSession(new AuthenticatedUser(
+                row.id(), row.username(), row.displayName(), roles, row.profileCode()));
     }
 
     public void revokeRefreshToken(String refreshToken) {
@@ -112,11 +122,15 @@ public class JwtTokenService {
                     .build()
                     .parseSignedClaims(authorization.substring(7))
                     .getPayload();
+            List<String> roles = readRoles(claims.get("roles"));
+            if (roles.isEmpty()) {
+                return null;
+            }
             return new AuthenticatedUser(
                     claims.getSubject(),
                     claims.get("username", String.class),
                     claims.get("fullName", String.class),
-                    normalizeRole(claims.get("role", String.class)),
+                    roles,
                     claims.get("studentCode", String.class));
         } catch (JwtException | IllegalArgumentException e) {
             return null;
@@ -130,7 +144,7 @@ public class JwtTokenService {
                 .issuer("academic-portal")
                 .claim("username", user.username())
                 .claim("fullName", user.fullName())
-                .claim("role", normalizeRole(user.role()))
+                .claim("roles", normalizeRoles(user.roles()))
                 .claim("studentCode", user.studentCode())
                 .issuedAt(java.util.Date.from(now))
                 .expiration(java.util.Date.from(now.plusSeconds(ACCESS_TOKEN_TTL_SECONDS)))
@@ -164,13 +178,55 @@ public class JwtTokenService {
         }
     }
 
-    private String normalizeRole(String role) {
-        return role == null ? "STUDENT" : role.toUpperCase();
+    private List<String> loadRoles(String userId) {
+        return jdbcTemplate.query("""
+                SELECT role.code
+                FROM user_roles userRole
+                JOIN roles role ON role.id = userRole.role_id
+                WHERE userRole.user_id = ?
+                ORDER BY role.code
+                """, (rs, rowNum) -> normalizeRole(rs.getString("code")), userId);
     }
 
-    public record AuthenticatedUser(String id, String username, String fullName, String role, String studentCode) {
+    private List<String> readRoles(Object value) {
+        if (!(value instanceof List<?> values)) {
+            return List.of();
+        }
+        List<String> roles = new ArrayList<>();
+        for (Object role : values) {
+            if (role instanceof String text && !text.isBlank()) {
+                roles.add(normalizeRole(text));
+            }
+        }
+        return normalizeRoles(roles);
+    }
+
+    private List<String> normalizeRoles(List<String> roles) {
+        if (roles == null) {
+            return List.of();
+        }
+        return roles.stream()
+                .filter(role -> role != null && !role.isBlank())
+                .map(this::normalizeRole)
+                .distinct()
+                .sorted()
+                .toList();
+    }
+
+    private String normalizeRole(String role) {
+        return role.toUpperCase(Locale.ROOT);
+    }
+
+    public record AuthenticatedUser(
+            String id, String username, String fullName, List<String> roles, String studentCode) {
+        public AuthenticatedUser {
+            roles = roles == null ? List.of() : List.copyOf(roles);
+        }
     }
 
     public record SessionTokens(String accessToken, String refreshToken) {
+    }
+
+    private record RefreshUser(String id, String username, String displayName, String profileCode) {
     }
 }

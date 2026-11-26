@@ -4,10 +4,12 @@ package com.example.quanlydaotao.service;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import org.springframework.jdbc.core.JdbcTemplate;
 import tools.jackson.databind.JsonNode;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -16,10 +18,14 @@ import org.springframework.web.server.ResponseStatusException;
 
 import com.example.quanlydaotao.entity.Student;
 import com.example.quanlydaotao.entity.StudentClass;
+import com.example.quanlydaotao.entity.StudentClassHistory;
 import com.example.quanlydaotao.entity.StudentStatus;
+import com.example.quanlydaotao.entity.StudentStatusHistory;
 import com.example.quanlydaotao.repository.StudentClassRepository;
+import com.example.quanlydaotao.repository.StudentClassHistoryRepository;
 import com.example.quanlydaotao.repository.StudentRepository;
 import com.example.quanlydaotao.repository.StudentStatusRepository;
+import com.example.quanlydaotao.repository.StudentStatusHistoryRepository;
 
 @Service
 public class StudentService {
@@ -27,20 +33,33 @@ public class StudentService {
     private final StudentRepository studentRepository;
     private final StudentClassRepository studentClassRepository;
     private final StudentStatusRepository studentStatusRepository;
+    private final StudentClassHistoryRepository classHistoryRepository;
+    private final StudentStatusHistoryRepository statusHistoryRepository;
+    private final JdbcTemplate jdbcTemplate;
+    private final UserAccountProvisioningService accountProvisioningService;
 
     public StudentService(
             StudentRepository studentRepository,
             StudentClassRepository studentClassRepository,
-            StudentStatusRepository studentStatusRepository) {
+            StudentStatusRepository studentStatusRepository,
+            StudentClassHistoryRepository classHistoryRepository,
+            StudentStatusHistoryRepository statusHistoryRepository,
+            JdbcTemplate jdbcTemplate,
+            UserAccountProvisioningService accountProvisioningService) {
         this.studentRepository = studentRepository;
         this.studentClassRepository = studentClassRepository;
         this.studentStatusRepository = studentStatusRepository;
+        this.classHistoryRepository = classHistoryRepository;
+        this.statusHistoryRepository = statusHistoryRepository;
+        this.jdbcTemplate = jdbcTemplate;
+        this.accountProvisioningService = accountProvisioningService;
     }
 
     public List<Student> getAll(boolean includeInactive) {
         return studentRepository.findAll().stream()
                 .filter(s -> s.getDeletedAt() == null)
                 .filter(s -> includeInactive || !Boolean.FALSE.equals(s.getIsActive()))
+                .map(this::hydrate)
                 .collect(Collectors.toList());
     }
 
@@ -52,6 +71,7 @@ public class StudentService {
         return studentRepository.searchStudents(keyword.trim()).stream()
                 .filter(s -> s.getDeletedAt() == null)
                 .filter(s -> includeInactive || !Boolean.FALSE.equals(s.getIsActive()))
+                .map(this::hydrate)
                 .collect(Collectors.toList());
     }
 
@@ -64,16 +84,16 @@ public class StudentService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Sinh viên đã bị xóa mềm");
         }
 
-        return student;
+        return hydrate(student);
     }
 
     @Transactional
     public Student save(Student student) {
         LocalDateTime now = LocalDateTime.now();
         boolean creating = student.getId() == null;
-        UUID previousStatusId = null;
+        Student previous = null;
         StudentStatus selectedStatus = findStatus(student.getStatusId());
-        if (student.getId() == null) {
+        if (creating) {
             validateCodeFormat(student.getCode());
             applyClassDetails(student, null);
             validate(student, null);
@@ -84,63 +104,75 @@ public class StudentService {
                 student.setIsActive(true);
             }
         } else {
-            Student old = studentRepository.findById(student.getId())
+            previous = studentRepository.findById(student.getId())
                     .orElseThrow(() -> new ResponseStatusException(
                             HttpStatus.NOT_FOUND, "Không tìm thấy sinh viên cần cập nhật"));
-            previousStatusId = old.getStatusId();
-            if (!Objects.equals(normalize(old.getCode()), normalize(student.getCode()))) {
+            if (student.getUserId() == null) {
+                student.setUserId(previous.getUserId());
+            }
+            if (student.getStatusId() == null) {
+                student.setStatusId(statusHistoryRepository
+                        .findFirstByStudentIdAndCurrentTrue(previous.getId())
+                        .map(StudentStatusHistory::getStatusId)
+                        .orElse(null));
+                selectedStatus = findStatus(student.getStatusId());
+            }
+            if (!Objects.equals(normalize(previous.getCode()), normalize(student.getCode()))) {
                 validateCodeFormat(student.getCode());
             }
 
-            student.setCreatedAt(old.getCreatedAt());
-            student.setCreatedBy(old.getCreatedBy());
-            student.setDeletedAt(old.getDeletedAt());
-            student.setDeletedBy(old.getDeletedBy());
+            student.setCreatedAt(previous.getCreatedAt());
+            student.setCreatedBy(previous.getCreatedBy());
+            student.setDeletedAt(previous.getDeletedAt());
+            student.setDeletedBy(previous.getDeletedBy());
 
             if (student.getIsActive() == null) {
-                student.setIsActive(old.getIsActive());
+                student.setIsActive(previous.getIsActive());
             }
-            applyClassDetails(student, old);
-            validate(student, old.getId());
+            applyClassDetails(student, previous);
+            validate(student, previous.getId());
         }
 
-        student.setCode(student.getCode().trim());
+        student.setCode(student.getCode().trim().toUpperCase(Locale.ROOT));
         student.setFullName(student.getFullName().trim());
         if (student.getEmail() != null) {
-            student.setEmail(student.getEmail().trim());
+            student.setEmail(student.getEmail().trim().toLowerCase(Locale.ROOT));
         }
         if (student.getPhone() != null) {
             student.setPhone(student.getPhone().trim());
         }
+        if (creating && student.getUserId() == null) {
+            UUID userId = accountProvisioningService.createAccount(
+                    student.getCode(), student.getFullName(), student.getInitialPassword(), List.of("STUDENT"));
+            student.setUserId(userId);
+        }
+        student.setInitialPassword(null);
+        if (student.getUserId() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Sinh viên phải được liên kết với tài khoản");
+        }
+        Integer accountCount = jdbcTemplate.queryForObject("""
+                SELECT COUNT(DISTINCT account.id)
+                FROM users account
+                JOIN user_roles assignedRole ON assignedRole.user_id = account.id
+                JOIN roles assigned ON assigned.id = assignedRole.role_id
+                WHERE account.id = ?
+                  AND account.is_active = 1
+                  AND assigned.code = N'STUDENT'
+                  AND assigned.is_active = 1
+                """, Integer.class, student.getUserId());
+        if (accountCount == null || accountCount != 1) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "Tài khoản sinh viên không tồn tại hoặc đã bị vô hiệu hóa");
+        }
         student.setUpdatedAt(now);
         Student savedStudent = studentRepository.save(student);
-        if (selectedStatus == null) {
-            return savedStudent;
+        if (Boolean.FALSE.equals(savedStudent.getIsActive())) {
+            deactivateAccount(savedStudent.getUserId(), now);
         }
-
-        if (!creating && previousStatusId != null) {
-            StudentStatus previousStatus = studentStatusRepository.findByIdAndDeletedAtIsNull(previousStatusId)
-                    .orElse(null);
-            if (previousStatus != null) {
-                if (!sameStatus(previousStatus, selectedStatus)) {
-                    previousStatus.setCode(selectedStatus.getCode());
-                    previousStatus.setName(selectedStatus.getName());
-                    previousStatus.setDescription(selectedStatus.getDescription());
-                    studentStatusRepository.save(previousStatus);
-                }
-                savedStudent.setStatusId(previousStatus.getId());
-                return studentRepository.save(savedStudent);
-            }
-        }
-
-        StudentStatus studentStatus = new StudentStatus();
-        studentStatus.setStudentId(savedStudent.getId());
-        studentStatus.setCode(selectedStatus.getCode());
-        studentStatus.setName(selectedStatus.getName());
-        studentStatus.setDescription(selectedStatus.getDescription());
-        StudentStatus savedStatus = studentStatusRepository.save(studentStatus);
-        savedStudent.setStatusId(savedStatus.getId());
-        return studentRepository.save(savedStudent);
+        recordClassChange(savedStudent, creating ? null : previous, now);
+        recordStatusChange(savedStudent, selectedStatus, now);
+        savedStudent.setStatusId(selectedStatus == null ? null : selectedStatus.getId());
+        return hydrate(savedStudent);
     }
 
     private StudentStatus findStatus(UUID statusId) {
@@ -151,11 +183,6 @@ public class StudentService {
                 .filter(status -> !Boolean.FALSE.equals(status.getIsActive()))
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.BAD_REQUEST, "Trạng thái sinh viên không tồn tại hoặc đã ngừng hoạt động"));
-    }
-
-    private boolean sameStatus(StudentStatus left, StudentStatus right) {
-        return Objects.equals(normalize(left.getCode()), normalize(right.getCode()))
-                && Objects.equals(normalize(left.getName()), normalize(right.getName()));
     }
 
     @Transactional
@@ -179,9 +206,6 @@ public class StudentService {
         if (changes.has("cardPlace")) student.setCardPlace(textValue(changes.get("cardPlace")));
         if (changes.has("address")) student.setAddress(textValue(changes.get("address")));
         if (changes.has("currentAddress")) student.setCurrentAddress(textValue(changes.get("currentAddress")));
-        if (changes.has("academicYearYear")) {
-            student.setAcademicYearYear(dateTimeValue(changes.get("academicYearYear")));
-        }
         if (changes.has("departmentId")) student.setDepartmentId(uuidValue(changes.get("departmentId")));
         if (changes.has("majorId")) student.setMajorId(uuidValue(changes.get("majorId")));
         if (changes.has("trainingProgramId")) {
@@ -191,7 +215,7 @@ public class StudentService {
         if (changes.has("studentClassessId")) {
             student.setStudentClassessId(uuidValue(changes.get("studentClassessId")));
         }
-        if (changes.has("admissionYear")) student.setAdmissionYear(dateTimeValue(changes.get("admissionYear")));
+        if (changes.has("admissionYear")) student.setAdmissionYear(shortValue(changes.get("admissionYear")));
         if (changes.has("isActive") && !changes.get("isActive").isNull()) {
             student.setIsActive(changes.get("isActive").asBoolean());
         }
@@ -222,13 +246,13 @@ public class StudentService {
         }
     }
 
-    private LocalDateTime dateTimeValue(JsonNode node) {
+    private Short shortValue(JsonNode node) {
         String value = textValue(node);
         if (value == null) return null;
         try {
-            return LocalDateTime.parse(value);
-        } catch (java.time.format.DateTimeParseException exception) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Thời gian không hợp lệ");
+            return Short.valueOf(value);
+        } catch (NumberFormatException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Năm tuyển sinh không hợp lệ");
         }
     }
 
@@ -243,8 +267,9 @@ public class StudentService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Vui lòng chọn lớp sinh viên");
         }
         boolean duplicateCode = currentId == null
-                ? studentRepository.existsByCodeIgnoreCase(student.getCode().trim())
-                : studentRepository.existsByCodeIgnoreCaseAndIdNot(student.getCode().trim(), currentId);
+                ? studentRepository.existsByCodeAndDeletedAtIsNull(student.getCode().trim())
+                : studentRepository.existsByCodeAndDeletedAtIsNullAndIdNot(
+                        student.getCode().trim(), currentId);
         if (duplicateCode) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Mã sinh viên đã tồn tại");
         }
@@ -253,8 +278,9 @@ public class StudentService {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Email không hợp lệ");
             }
             boolean duplicateEmail = currentId == null
-                    ? studentRepository.existsByEmailIgnoreCase(student.getEmail().trim())
-                    : studentRepository.existsByEmailIgnoreCaseAndIdNot(student.getEmail().trim(), currentId);
+                    ? studentRepository.existsByEmailAndDeletedAtIsNull(student.getEmail().trim().toLowerCase(Locale.ROOT))
+                    : studentRepository.existsByEmailAndDeletedAtIsNullAndIdNot(
+                            student.getEmail().trim().toLowerCase(Locale.ROOT), currentId);
             if (duplicateEmail) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "Email đã được sử dụng");
             }
@@ -301,6 +327,92 @@ public class StudentService {
         return value == null ? null : value.trim();
     }
 
+    private Student hydrate(Student student) {
+        classHistoryRepository.findFirstByStudentIdAndCurrentTrue(student.getId())
+                .ifPresent(history -> {
+                    if (student.getStudentClassessId() == null) {
+                        student.setStudentClassessId(history.getStudentClassId());
+                    }
+                });
+        statusHistoryRepository.findFirstByStudentIdAndCurrentTrue(student.getId())
+                .ifPresent(history -> student.setStatusId(history.getStatusId()));
+        if (student.getStudentClassessId() != null) {
+            studentClassRepository.findByIdAndDeletedAtIsNull(student.getStudentClassessId())
+                    .ifPresent(studentClass -> {
+                        student.setDepartmentId(studentClass.getDepartmentId());
+                        student.setMajorId(studentClass.getMajorId());
+                        student.setTrainingProgramId(studentClass.getTrainingProgramId());
+                    });
+        }
+        return student;
+    }
+
+    private void recordClassChange(Student student, Student previous, LocalDateTime now) {
+        UUID previousClassId = previous == null ? null : previous.getStudentClassessId();
+        UUID newClassId = student.getStudentClassessId();
+        StudentClassHistory current = classHistoryRepository
+                .findFirstByStudentIdAndCurrentTrue(student.getId()).orElse(null);
+        if (current != null) {
+            previousClassId = current.getStudentClassId();
+        }
+        if (Objects.equals(previousClassId, newClassId)) {
+            if (current == null && newClassId != null) {
+                classHistoryRepository.save(newClassHistory(student.getId(), newClassId, now));
+            }
+            return;
+        }
+        if (current == null && previousClassId != null) {
+            StudentClassHistory prior = newClassHistory(student.getId(), previousClassId, now);
+            prior.setCurrent(false);
+            prior.setEffectiveFrom(previous.getCreatedAt() == null
+                    ? now.toLocalDate()
+                    : previous.getCreatedAt().toLocalDate());
+            prior.setEffectiveTo(now.toLocalDate());
+            classHistoryRepository.save(prior);
+        }
+        if (current != null) {
+            current.setCurrent(false);
+            current.setEffectiveTo(now.toLocalDate());
+            classHistoryRepository.save(current);
+        }
+        if (newClassId != null) {
+            classHistoryRepository.save(newClassHistory(student.getId(), newClassId, now));
+        }
+    }
+
+    private StudentClassHistory newClassHistory(UUID studentId, UUID studentClassId, LocalDateTime now) {
+        StudentClassHistory history = new StudentClassHistory();
+        history.setStudentId(studentId);
+        history.setStudentClassId(studentClassId);
+        history.setEffectiveFrom(now.toLocalDate());
+        history.setCurrent(true);
+        history.setCreatedAt(now);
+        return history;
+    }
+
+    private void recordStatusChange(Student student, StudentStatus selectedStatus, LocalDateTime now) {
+        StudentStatusHistory current = statusHistoryRepository
+                .findFirstByStudentIdAndCurrentTrue(student.getId()).orElse(null);
+        UUID selectedId = selectedStatus == null ? null : selectedStatus.getId();
+        if (Objects.equals(current == null ? null : current.getStatusId(), selectedId)) {
+            return;
+        }
+        if (current != null) {
+            current.setCurrent(false);
+            current.setEffectiveTo(now);
+            statusHistoryRepository.save(current);
+        }
+        if (selectedId != null) {
+            StudentStatusHistory history = new StudentStatusHistory();
+            history.setStudentId(student.getId());
+            history.setStatusId(selectedId);
+            history.setEffectiveFrom(now);
+            history.setCurrent(true);
+            history.setCreatedAt(now);
+            statusHistoryRepository.save(history);
+        }
+    }
+
     @Transactional
     public void delete(UUID id) {
         Student student = studentRepository.findById(id)
@@ -312,5 +424,16 @@ public class StudentService {
         student.setUpdatedAt(LocalDateTime.now());
 
         studentRepository.save(student);
+        deactivateAccount(student.getUserId(), student.getUpdatedAt());
+    }
+
+    private void deactivateAccount(UUID userId, LocalDateTime now) {
+        if (userId != null) {
+            jdbcTemplate.update("""
+                    UPDATE users
+                    SET is_active = 0, updated_at = ?
+                    WHERE id = ?
+                    """, now, userId);
+        }
     }
 }

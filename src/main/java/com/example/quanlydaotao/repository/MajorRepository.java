@@ -5,6 +5,6 @@ import java.util.UUID;
 import com.example.quanlydaotao.entity.Major;
 
 public interface MajorRepository extends SoftDeleteRepository<Major> {
-    boolean existsByCodeIgnoreCase(String code);
-    boolean existsByCodeIgnoreCaseAndIdNot(String code, UUID id);
+    boolean existsByCodeAndDeletedAtIsNull(String code);
+    boolean existsByCodeAndDeletedAtIsNullAndIdNot(String code, UUID id);
 }

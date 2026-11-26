@@ -48,7 +48,6 @@ public class SemesterService extends AbstractCrudService<Semester> {
         if (Boolean.FALSE.equals(schoolYear.getIsActive())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Không thể gắn học kỳ với năm học đã ngừng hoạt động");
         }
-        semester.setSchoolYearName(schoolYear.getName() == null ? schoolYear.getCode() : schoolYear.getName());
         if (schoolYear.getStartDate() != null && semester.getStartDate() != null
                 && semester.getStartDate().isBefore(schoolYear.getStartDate())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Học kỳ không thể bắt đầu trước năm học");

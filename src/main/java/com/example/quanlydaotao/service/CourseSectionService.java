@@ -4,14 +4,14 @@ import java.util.UUID;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
-import com.example.quanlydaotao.entity.Room;
 import com.example.quanlydaotao.entity.CourseSection;
-import com.example.quanlydaotao.repository.BuildingRepository;
 import com.example.quanlydaotao.repository.CourseRepository;
 import com.example.quanlydaotao.repository.CourseSectionRepository;
-import com.example.quanlydaotao.repository.RoomRepository;
+import com.example.quanlydaotao.repository.LecturerCourseClassRepository;
 import com.example.quanlydaotao.repository.SemesterRepository;
 
 @Service
@@ -19,35 +19,47 @@ public class CourseSectionService extends AbstractCrudService<CourseSection> {
 
     private final SemesterRepository semesterRepository;
     private final CourseRepository courseRepository;
-    private final RoomRepository roomRepository;
-    private final BuildingRepository buildingRepository;
+    private final LecturerCourseClassRepository lecturerAssignments;
+    private final JdbcTemplate jdbcTemplate;
 
     public CourseSectionService(
             CourseSectionRepository repository,
             SemesterRepository semesterRepository,
             CourseRepository courseRepository,
-            RoomRepository roomRepository,
-            BuildingRepository buildingRepository) {
+            LecturerCourseClassRepository lecturerAssignments,
+            JdbcTemplate jdbcTemplate) {
         super(repository);
         this.semesterRepository = semesterRepository;
         this.courseRepository = courseRepository;
-        this.roomRepository = roomRepository;
-        this.buildingRepository = buildingRepository;
+        this.lecturerAssignments = lecturerAssignments;
+        this.jdbcTemplate = jdbcTemplate;
     }
 
     @Override
+    @Transactional
     public CourseSection create(CourseSection section) {
         validate(section);
         return super.create(section);
     }
 
     @Override
+    @Transactional
     public CourseSection update(UUID id, CourseSection section) {
+        section.setId(id);
         validate(section);
         return super.update(id, section);
     }
 
     private void validate(CourseSection section) {
+        if (section.getStatus() == null || section.getStatus().isBlank()) {
+            section.setStatus("DRAFT");
+        } else {
+            section.setStatus(section.getStatus().trim().toUpperCase(java.util.Locale.ROOT));
+        }
+        if (!java.util.Set.of("DRAFT", "OPEN", "CLOSED", "COMPLETED", "CANCELLED")
+                .contains(section.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Trạng thái lớp học phần không hợp lệ");
+        }
         if (section.getSemesterId() == null
                 || semesterRepository.findByIdAndDeletedAtIsNull(section.getSemesterId()).isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Vui lòng chọn học kỳ còn hiệu lực");
@@ -59,20 +71,30 @@ public class CourseSectionService extends AbstractCrudService<CourseSection> {
                 .filter(course -> !Boolean.FALSE.equals(course.getIsActive()))
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.BAD_REQUEST, "Học phần không tồn tại hoặc đã ngừng hoạt động"));
-        if (section.getRoomId() != null) {
-            Room room = roomRepository.findByIdAndDeletedAtIsNull(section.getRoomId())
-                    .filter(item -> !Boolean.FALSE.equals(item.getIsActive()))
-                    .orElseThrow(() -> new ResponseStatusException(
-                            HttpStatus.BAD_REQUEST, "Phòng học không tồn tại hoặc đã ngừng hoạt động"));
-            if (section.getBuildingId() != null && !section.getBuildingId().equals(room.getBuildingId())) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Phòng học không thuộc tòa nhà được chọn");
+        if ("OPEN".equals(section.getStatus())) {
+            if (section.getGradingScaleId() == null) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT, "Không thể mở lớp khi chưa chọn thang điểm");
             }
-        }
-        if (section.getBuildingId() != null) {
-            buildingRepository.findByIdAndDeletedAtIsNull(section.getBuildingId())
-                    .filter(item -> !Boolean.FALSE.equals(item.getIsActive()))
-                    .orElseThrow(() -> new ResponseStatusException(
-                            HttpStatus.BAD_REQUEST, "Tòa nhà không tồn tại hoặc đã ngừng hoạt động"));
+            if (section.getId() == null) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT, "Cần lưu lớp học phần và phân công giảng viên trước khi mở lớp");
+            }
+            if (!lecturerAssignments.existsByCourseSectionIdAndIsActiveTrueAndDeletedAtIsNull(section.getId())) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT, "Không thể mở lớp khi chưa phân công giảng viên phụ trách");
+            }
+            Integer activeScaleCount = jdbcTemplate.queryForObject("""
+                    SELECT COUNT(*)
+                    FROM grading_scales
+                    WHERE id = ?
+                      AND is_active = 1
+                      AND deleted_at IS NULL
+                    """, Integer.class, section.getGradingScaleId());
+            if (activeScaleCount == null || activeScaleCount != 1) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT, "Không thể mở lớp khi thang điểm chưa hoạt động");
+            }
         }
         if (section.getMinStudents() != null && section.getMaxStudents() != null
                 && section.getMinStudents() > section.getMaxStudents()) {

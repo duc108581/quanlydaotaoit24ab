@@ -13,22 +13,22 @@ public class Course extends AuditedEntity {
     @Column(name = "department_id")
     private UUID departmentId;
 
-    @Column(name = "code")
+    @Column(name = "code", length = 50, nullable = false)
     private String code;
 
-    @Column(name = "name")
+    @Column(name = "name", length = 255, nullable = false)
     private String name;
 
     @Column(name = "name_en")
     private String nameEn;
 
-    @Column(name = "credits")
+    @Column(name = "credits", precision = 5, scale = 2, nullable = false)
     private java.math.BigDecimal credits;
 
-    @Column(name = "cource_type")
+    @Column(name = "course_type", length = 50)
     private String courseType;
 
-    @Column(name = "description")
+    @Column(name = "description", length = 500)
     private String description;
 
     public UUID getDepartmentId() { return departmentId; }

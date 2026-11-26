@@ -1,6 +1,7 @@
 package com.example.quanlydaotao.service;
 
 import java.time.LocalDateTime;
+import java.util.Locale;
 import java.util.UUID;
 
 import org.springframework.http.HttpStatus;
@@ -35,6 +36,35 @@ public class StudentCourseSectionService extends AbstractCrudService<StudentCour
     @Override
     @Transactional
     public StudentCourseSection create(StudentCourseSection registration) {
+        if (registration.getStatus() == null || registration.getStatus().isBlank()) {
+            registration.setStatus("REGISTERED");
+        }
+        String requestedStatus = registration.getStatus().trim().toUpperCase(Locale.ROOT);
+        if (!"REGISTERED".equals(requestedStatus)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "Đăng ký mới phải bắt đầu ở trạng thái REGISTERED");
+        }
+        if (registration.getStudentId() != null && registration.getCourseSectionId() != null) {
+            StudentCourseSection cancelled = registrationRepository
+                    .findFirstByStudentIdAndCourseSectionIdAndStatusAndDeletedAtIsNullOrderByRegistrationDateDesc(
+                            registration.getStudentId(), registration.getCourseSectionId(), "CANCELLED")
+                    .orElseGet(() -> registrationRepository
+                            .findFirstByStudentIdAndCourseSectionIdAndStatusAndDeletedAtIsNullOrderByRegistrationDateDesc(
+                                    registration.getStudentId(), registration.getCourseSectionId(), "DROPPED")
+                            .orElse(null));
+            if (cancelled != null) {
+                registration.setId(cancelled.getId());
+                registration.setAttemptNumber(cancelled.getAttemptNumber());
+                registration.setRegistrationType(cancelled.getRegistrationType());
+                registration.setCreatedAt(cancelled.getCreatedAt());
+                registration.setCreatedBy(cancelled.getCreatedBy());
+                registration.setReviewedBy(null);
+                registration.setReviewedAt(null);
+                registration.setStatus("REGISTERED");
+                registration.setActiveRegistration(true);
+                return save(registration, cancelled.getId());
+            }
+        }
         return save(registration, null);
     }
 
@@ -54,14 +84,20 @@ public class StudentCourseSectionService extends AbstractCrudService<StudentCour
         if (student.getDeletedAt() != null || Boolean.FALSE.equals(student.getIsActive())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Sinh viên đã ngừng hoạt động");
         }
-        CourseSection section = courseSectionRepository.findByIdAndDeletedAtIsNull(registration.getCourseSectionId())
+        CourseSection section = courseSectionRepository.findByIdForUpdate(registration.getCourseSectionId())
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.BAD_REQUEST, "Lớp học phần không tồn tại hoặc đã bị xóa"));
-        boolean cancelled = registration.getStatus() != null
-                && ("cancelled".equalsIgnoreCase(registration.getStatus())
-                || "dropped".equalsIgnoreCase(registration.getStatus()));
+        String status = registration.getStatus() == null ? "REGISTERED"
+                : registration.getStatus().trim().toUpperCase(Locale.ROOT);
+        if (!java.util.Set.of(
+                "REGISTERED", "CONFIRMED", "STUDYING", "COMPLETED", "CANCELLED", "DROPPED")
+                .contains(status)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Trạng thái đăng ký không hợp lệ");
+        }
+        registration.setStatus(status);
+        boolean cancelled = "CANCELLED".equals(status) || "DROPPED".equals(status);
         if (!cancelled && (Boolean.FALSE.equals(section.getIsActive())
-                || !"open".equalsIgnoreCase(section.getStatus()))) {
+                || !"OPEN".equalsIgnoreCase(section.getStatus()))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Lớp học phần hiện không mở đăng ký");
         }
 
@@ -80,12 +116,20 @@ public class StudentCourseSectionService extends AbstractCrudService<StudentCour
                     && registrationRepository.countActiveByCourseSectionId(section.getId()) >= section.getMaxStudents()) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "Lớp học phần đã đủ sức chứa");
             }
-            if (registration.getStatus() == null || registration.getStatus().isBlank()) {
-                registration.setStatus("REGISTERED");
-            }
+            registration.setActiveRegistration(true);
+        } else {
+            registration.setActiveRegistration(false);
         }
         if (registration.getRegistrationDate() == null) {
             registration.setRegistrationDate(now);
+        }
+        if (registration.getAttemptNumber() == null || registration.getAttemptNumber() < 1) {
+            registration.setAttemptNumber(1);
+        }
+        if (registration.getRegistrationType() == null || registration.getRegistrationType().isBlank()) {
+            registration.setRegistrationType("FIRST");
+        } else {
+            registration.setRegistrationType(registration.getRegistrationType().trim().toUpperCase(Locale.ROOT));
         }
         return currentId == null ? super.create(registration) : super.update(currentId, registration);
     }

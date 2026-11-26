@@ -11,23 +11,20 @@ import jakarta.persistence.Table;
 @Table(name = "course_sections")
 public class CourseSection extends AuditedEntity {
 
-    @Column(name = "code", length = 100)
+    @Column(name = "code", length = 100, nullable = false)
     private String code;
 
-    @Column(name = "name", length = 255)
+    @Column(name = "name", length = 255, nullable = false)
     private String name;
 
     @Column(name = "course_id")
     private UUID courseId;
 
-    @Column(name = "semester_id")
+    @Column(name = "semester_id", nullable = false)
     private UUID semesterId;
 
-    @Column(name = "room_id")
-    private UUID roomId;
-
-    @Column(name = "building_id")
-    private UUID buildingId;
+    @Column(name = "grading_scale_id")
+    private UUID gradingScaleId;
 
     @Column(name = "max_students")
     private Integer maxStudents;
@@ -35,10 +32,10 @@ public class CourseSection extends AuditedEntity {
     @Column(name = "min_students")
     private Integer minStudents;
 
-    @Column(name = "class_type", length = 255)
+    @Column(name = "class_type", length = 100)
     private String classType;
 
-    @Column(name = "status", length = 50)
+    @Column(name = "status", length = 30, nullable = false)
     private String status;
 
     @Column(name = "registration_start")
@@ -47,7 +44,7 @@ public class CourseSection extends AuditedEntity {
     @Column(name = "registration_end")
     private LocalDateTime registrationEnd;
 
-    @Column(name = "note", length = 255)
+    @Column(name = "note", length = 500)
     private String note;
 
     public String getCode() { return code; }
@@ -58,10 +55,8 @@ public class CourseSection extends AuditedEntity {
     public void setCourseId(UUID courseId) { this.courseId = courseId; }
     public UUID getSemesterId() { return semesterId; }
     public void setSemesterId(UUID semesterId) { this.semesterId = semesterId; }
-    public UUID getRoomId() { return roomId; }
-    public void setRoomId(UUID roomId) { this.roomId = roomId; }
-    public UUID getBuildingId() { return buildingId; }
-    public void setBuildingId(UUID buildingId) { this.buildingId = buildingId; }
+    public UUID getGradingScaleId() { return gradingScaleId; }
+    public void setGradingScaleId(UUID gradingScaleId) { this.gradingScaleId = gradingScaleId; }
     public Integer getMaxStudents() { return maxStudents; }
     public void setMaxStudents(Integer maxStudents) { this.maxStudents = maxStudents; }
     public Integer getMinStudents() { return minStudents; }

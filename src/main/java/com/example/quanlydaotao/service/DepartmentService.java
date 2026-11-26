@@ -1,6 +1,7 @@
 package com.example.quanlydaotao.service;
 
 import java.util.UUID;
+import java.util.Locale;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -33,13 +34,14 @@ public class DepartmentService extends AbstractCrudService<Department> {
 
     private void validate(Department department, UUID currentId) {
         department.setCode(clean(department.getCode()));
+        if (department.getCode() != null) department.setCode(department.getCode().toUpperCase(Locale.ROOT));
         department.setName(clean(department.getName()));
         if (department.getCode() == null || department.getName() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Mã và tên khoa là bắt buộc");
         }
         boolean duplicate = currentId == null
-                ? repository.existsByCodeIgnoreCase(department.getCode())
-                : repository.existsByCodeIgnoreCaseAndIdNot(department.getCode(), currentId);
+                ? repository.existsByCodeAndDeletedAtIsNull(department.getCode())
+                : repository.existsByCodeAndDeletedAtIsNullAndIdNot(department.getCode(), currentId);
         if (duplicate) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Mã khoa đã tồn tại");
         }

@@ -6,6 +6,7 @@ import java.util.UUID;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 
 @Entity
 @Table(name = "lecturers")
@@ -14,32 +15,35 @@ public class Lecturer extends AuditedEntity {
     @Column(name = "lecturer_code", nullable = false)
     private String lecturerCode;
 
-    @Column(name = "full_name", nullable = false)
+    @Transient
     private String fullName;
 
-    @Column(name = "gender")
+    @Transient
     private String gender;
 
-    @Column(name = "date_of_birth")
+    @Transient
     private LocalDate dateOfBirth;
 
-    @Column(name = "email")
+    @Transient
     private String email;
 
-    @Column(name = "phone")
+    @Transient
     private String phone;
 
-    @Column(name = "user_id")
+    @Transient
     private UUID userId;
 
-    @Column(name = "department_id", nullable = false)
+    @Transient
     private UUID departmentId;
 
-    @Column(name = "position_id")
+    @Transient
     private UUID positionId;
 
-    @Column(name = "hire_date")
+    @Transient
     private LocalDate hireDate;
+
+    @Transient
+    private String initialPassword;
 
     public String getLecturerCode() { return lecturerCode; }
     public void setLecturerCode(String lecturerCode) { this.lecturerCode = lecturerCode; }
@@ -65,4 +69,6 @@ public class Lecturer extends AuditedEntity {
     public void setPositionId(UUID positionId) { this.positionId = positionId; }
     public LocalDate getHireDate() { return hireDate; }
     public void setHireDate(LocalDate hireDate) { this.hireDate = hireDate; }
+    public String getInitialPassword() { return initialPassword; }
+    public void setInitialPassword(String initialPassword) { this.initialPassword = initialPassword; }
 }

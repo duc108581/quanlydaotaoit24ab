@@ -44,7 +44,7 @@ The application uses Spring Boot for sign-in and token issuance, and a separate 
 ### Start the services
 
 1. Apply `database/quanlydaotao.sql`, `database/add-notifications.sql`, and `database/add-refresh-tokens.sql` to the SQL Server database.
-2. Set `JWT_SECRET` to the same random value of at least 32 characters for both applications. Set `INITIAL_ADMIN_PASSWORD` to a strong initial password for the seeded `admin` account. Do not commit either secret.
+2. Set `JWT_SECRET` to the same random value of at least 32 characters for both applications. To create the first administrator, set `APP_BOOTSTRAP_ADMIN_USERNAME`, `APP_BOOTSTRAP_ADMIN_DISPLAY_NAME`, and `APP_BOOTSTRAP_ADMIN_PASSWORD` for the first Spring Boot startup. If no active `ADMIN` account exists, Spring Boot stores the account and its role assignment in the configured SQL Server database and hashes the password. The `roles` table must contain exactly one active `ADMIN` role. Remove the bootstrap credentials after the account is created; future startups leave the existing account unchanged. Do not commit secrets.
 3. Configure Spring Boot database settings with `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, and `SPRING_DATASOURCE_PASSWORD`, then start it on port 8080:
 
    ```powershell

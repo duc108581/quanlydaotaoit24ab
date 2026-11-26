@@ -1,6 +1,7 @@
 package com.example.quanlydaotao.service;
 
 import java.util.UUID;
+import java.util.Locale;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -56,6 +57,9 @@ public class StudentClassService extends AbstractCrudService<StudentClass> {
 
     private void validate(StudentClass studentClass, UUID currentId) {
         studentClass.setCode(clean(studentClass.getCode()));
+        if (studentClass.getCode() != null) {
+            studentClass.setCode(studentClass.getCode().toUpperCase(Locale.ROOT));
+        }
         studentClass.setName(clean(studentClass.getName()));
         if (studentClass.getCode() == null || studentClass.getName() == null
                 || studentClass.getAcademicYearId() == null || studentClass.getDepartmentId() == null
@@ -86,8 +90,8 @@ public class StudentClassService extends AbstractCrudService<StudentClass> {
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Giảng viên cố vấn không tồn tại hoặc đã ngừng hoạt động"));
         }
         boolean duplicate = currentId == null
-                ? repository.existsByCodeIgnoreCase(studentClass.getCode())
-                : repository.existsByCodeIgnoreCaseAndIdNot(studentClass.getCode(), currentId);
+                ? repository.existsByCodeAndDeletedAtIsNull(studentClass.getCode())
+                : repository.existsByCodeAndDeletedAtIsNullAndIdNot(studentClass.getCode(), currentId);
         if (duplicate) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Mã lớp sinh viên đã tồn tại");
         }

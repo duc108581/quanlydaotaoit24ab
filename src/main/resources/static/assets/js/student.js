@@ -5,6 +5,7 @@ const fields = [
     'studentCode',
     'fullName',
     'email',
+    'initialPassword',
     'phone',
     'dateOfBirth',
     'gender',
@@ -27,6 +28,7 @@ const textToProperty = {
     studentCode: 'code',
     fullName: 'fullName',
     email: 'email',
+    initialPassword: 'initialPassword',
     phone: 'phone',
     dateOfBirth: 'dateOfBirth',
     gender: 'gender',
@@ -260,6 +262,13 @@ function setupFormMode(mode) {
             if (element) element.disabled = true;
         });
     }
+    const initialPassword = document.getElementById('initialPassword');
+    const initialPasswordGroup = document.getElementById('initialPasswordGroup');
+    if (initialPassword && initialPasswordGroup) {
+        initialPassword.required = mode === 'create';
+        initialPassword.disabled = mode !== 'create';
+        initialPasswordGroup.hidden = mode !== 'create';
+    }
 }
 
 async function loadStudentDetail(id, mode) {
@@ -354,6 +363,10 @@ async function saveStudent(mode, id) {
 
     if (!student.fullName) {
         alert('Vui lòng nhập họ và tên');
+        return;
+    }
+    if (mode === 'create' && (!student.initialPassword || student.initialPassword.length < 12 || student.initialPassword.length > 72)) {
+        alert('Mật khẩu ban đầu cần từ 12 đến 72 ký tự');
         return;
     }
 

@@ -1,6 +1,7 @@
 package com.example.quanlydaotao.repository;
 
 import java.util.UUID;
+import java.util.Optional;
 
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -15,8 +16,8 @@ public interface StudentCourseSectionRepository extends SoftDeleteRepository<Stu
         WHERE registration.studentId = :studentId
           AND registration.courseSectionId = :courseSectionId
           AND registration.deletedAt IS NULL
-          AND registration.isActive = true
-          AND LOWER(COALESCE(registration.status, '')) NOT IN ('cancelled', 'dropped')
+          AND registration.activeRegistration = true
+          AND registration.status IN ('REGISTERED', 'CONFIRMED')
           AND (:id IS NULL OR registration.id <> :id)
         """)
     boolean existsActiveRegistration(
@@ -29,8 +30,21 @@ public interface StudentCourseSectionRepository extends SoftDeleteRepository<Stu
         FROM StudentCourseSection registration
         WHERE registration.courseSectionId = :courseSectionId
           AND registration.deletedAt IS NULL
-          AND registration.isActive = true
-          AND LOWER(COALESCE(registration.status, '')) NOT IN ('cancelled', 'dropped')
+          AND registration.activeRegistration = true
+          AND registration.status IN ('REGISTERED', 'CONFIRMED')
         """)
     long countActiveByCourseSectionId(@Param("courseSectionId") UUID courseSectionId);
+
+    Optional<StudentCourseSection> findFirstByStudentIdAndCourseSectionIdAndStatusAndDeletedAtIsNullOrderByRegistrationDateDesc(
+            UUID studentId, UUID courseSectionId, String status);
+
+    @Query("""
+        SELECT COALESCE(MAX(registration.attemptNumber), 0)
+        FROM StudentCourseSection registration
+        WHERE registration.studentId = :studentId
+          AND registration.courseSectionId = :courseSectionId
+        """)
+    Integer findMaxAttemptNumber(
+            @Param("studentId") UUID studentId,
+            @Param("courseSectionId") UUID courseSectionId);
 }

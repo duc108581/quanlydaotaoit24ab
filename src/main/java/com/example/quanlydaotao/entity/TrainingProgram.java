@@ -12,10 +12,10 @@ import jakarta.persistence.Table;
 @Table(name = "training_programs")
 public class TrainingProgram extends AuditedEntity {
 
-    @Column(name = "code")
+    @Column(name = "code", length = 50, nullable = false)
     private String code;
 
-    @Column(name = "name")
+    @Column(name = "name", length = 255, nullable = false)
     private String name;
 
     @Column(name = "department_id")
@@ -28,7 +28,7 @@ public class TrainingProgram extends AuditedEntity {
     private BigDecimal totalCredits;
 
     @Column(name = "admission_year")
-    private LocalDate admissionYear;
+    private Short admissionYear;
 
     @Column(name = "duration_years")
     private BigDecimal durationYears;
@@ -55,8 +55,8 @@ public class TrainingProgram extends AuditedEntity {
     public void setMajorId(UUID majorId) { this.majorId = majorId; }
     public BigDecimal getTotalCredits() { return totalCredits; }
     public void setTotalCredits(BigDecimal totalCredits) { this.totalCredits = totalCredits; }
-    public LocalDate getAdmissionYear() { return admissionYear; }
-    public void setAdmissionYear(LocalDate admissionYear) { this.admissionYear = admissionYear; }
+    public Short getAdmissionYear() { return admissionYear; }
+    public void setAdmissionYear(Short admissionYear) { this.admissionYear = admissionYear; }
     public BigDecimal getDurationYears() { return durationYears; }
     public void setDurationYears(BigDecimal durationYears) { this.durationYears = durationYears; }
     public LocalDate getEffectiveDate() { return effectiveDate; }

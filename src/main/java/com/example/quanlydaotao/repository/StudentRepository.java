@@ -13,15 +13,15 @@ import com.example.quanlydaotao.entity.Student;
 
 public interface StudentRepository extends JpaRepository<Student, UUID> {
 
-    Optional<Student> findByCodeIgnoreCaseAndDeletedAtIsNull(String code);
+    Optional<Student> findByCodeAndDeletedAtIsNull(String code);
 
-    boolean existsByCodeIgnoreCase(String code);
+    boolean existsByCodeAndDeletedAtIsNull(String code);
 
-    boolean existsByCodeIgnoreCaseAndIdNot(String code, UUID id);
+    boolean existsByCodeAndDeletedAtIsNullAndIdNot(String code, UUID id);
 
-    boolean existsByEmailIgnoreCase(String email);
+    boolean existsByEmailAndDeletedAtIsNull(String email);
 
-    boolean existsByEmailIgnoreCaseAndIdNot(String email, UUID id);
+    boolean existsByEmailAndDeletedAtIsNullAndIdNot(String email, UUID id);
 
     @Query("""
         SELECT s FROM Student s

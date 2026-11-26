@@ -343,18 +343,37 @@ async function renderStudentDashboard() {
 async function renderStudentManager() {
     const rows = await springRequest('/students').catch(() => []);
     const classes = await springRequest('/student-form-options/classes').catch(() => []);
-    const fields = [
-        ['code', 'Mã sinh viên'],
-        ['fullName', 'Họ và tên'],
-        ['email', 'Email'],
-        ['phone', 'Số điện thoại']
-    ];
     renderResourceShell({
         title: 'Quản lý sinh viên',
         description: 'Thêm, sửa, xóa và tìm kiếm hồ sơ sinh viên.',
         endpoint: '/students',
         rows,
-        fields,
+        fields: [
+            ['code', 'Mã sinh viên'],
+            ['fullName', 'Họ và tên'],
+            ['email', 'Email'],
+            ['phone', 'Số điện thoại'],
+            ['studentClassessId', 'Lớp sinh viên']
+        ],
+        formFields: [
+            ['code', 'Mã sinh viên'],
+            ['fullName', 'Họ và tên'],
+            ['email', 'Email'],
+            ['phone', 'Số điện thoại'],
+            ['studentClassessId', 'Lớp sinh viên'],
+            ['initialPassword', 'Mật khẩu ban đầu']
+        ],
+        createOnlyFields: ['initialPassword'],
+        inputTypes: { initialPassword: 'password', email: 'email', phone: 'tel' },
+        requiredFields: ['code', 'fullName', 'studentClassessId', 'initialPassword'],
+        inputAttributes: { initialPassword: { minlength: '12', maxlength: '72', autocomplete: 'new-password' } },
+        formSelects: {
+            studentClassessId: {
+                rows: classes,
+                label: (item) => [item.code, item.name].filter(Boolean).join(' - ')
+            }
+        },
+        formNotice: classes.length ? '' : 'Chưa có lớp sinh viên đang hoạt động. Hãy tạo lớp trước khi thêm sinh viên.',
         lookupDefinitions: {
             studentClassessId: { rows: classes, codeKey: 'code', nameKey: 'name' }
         },
@@ -365,10 +384,17 @@ async function renderStudentManager() {
 async function renderSimpleResource(endpoint, kind) {
     const rows = await springRequest(endpoint).catch(() => []);
     let lookupDefinitions = {};
+    let formSelects = {};
     if (kind === 'lecturer') {
         const departments = await springRequest('/departments').catch(() => []);
         lookupDefinitions = {
             departmentId: { rows: departments, codeKey: 'code', nameKey: 'name' }
+        };
+        formSelects = {
+            departmentId: {
+                rows: departments,
+                label: (item) => [item.code, item.name].filter(Boolean).join(' - ')
+            }
         };
     } else if (kind === 'course') {
         const departments = await springRequest('/departments').catch(() => []);
@@ -392,6 +418,11 @@ async function renderSimpleResource(endpoint, kind) {
             title: 'Quản lý giảng viên',
             description: 'Thông tin giảng viên, liên hệ và khoa quản lý.',
             fields: [['lecturerCode', 'Mã giảng viên'], ['fullName', 'Họ và tên'], ['email', 'Email'], ['phone', 'Số điện thoại'], ['departmentId', 'Khoa']],
+            formFields: [['lecturerCode', 'Mã giảng viên'], ['fullName', 'Họ và tên'], ['email', 'Email'], ['phone', 'Số điện thoại'], ['departmentId', 'Khoa'], ['initialPassword', 'Mật khẩu ban đầu']],
+            createOnlyFields: ['initialPassword'],
+            inputTypes: { initialPassword: 'password', email: 'email', phone: 'tel' },
+            requiredFields: ['lecturerCode', 'fullName', 'departmentId', 'initialPassword'],
+            inputAttributes: { initialPassword: { minlength: '12', maxlength: '72', autocomplete: 'new-password' } },
             addLabel: 'Thêm giảng viên'
         },
         'academic-year': {
@@ -417,7 +448,8 @@ async function renderSimpleResource(endpoint, kind) {
         ...config,
         endpoint,
         rows,
-        lookupDefinitions
+        lookupDefinitions,
+        formSelects
     });
 }
 
@@ -569,14 +601,33 @@ function openResourceDialog(config, record = null) {
     const form = document.getElementById('resourceForm');
     const existingFields = form.querySelectorAll('.dialog-fields');
     existingFields.forEach((element) => element.remove());
-    const fields = config.fields.map(([key, label]) => `
-        <div class="dialog-field"><label>${escapeHtml(label)}</label><input name="${escapeHtml(key)}" value="${escapeHtml(record?.[key] == null ? '' : String(record[key]))}" /></div>`).join('');
+    const formFields = config.formFields || config.fields;
+    const fields = formFields
+        .filter(([key]) => !record || !config.createOnlyFields?.includes(key))
+        .map(([key, label]) => {
+            const required = config.requiredFields?.includes(key)
+                && (!record || !config.createOnlyFields?.includes(key));
+            const select = config.formSelects?.[key];
+            if (select) {
+                const selectedValue = record?.[key] == null ? '' : String(record[key]);
+                const options = (select.rows || []).map((item) => {
+                    const value = String(item.id);
+                    const selected = normalizeIdentifier(value) === normalizeIdentifier(selectedValue) ? ' selected' : '';
+                    return `<option value="${escapeHtml(value)}"${selected}>${escapeHtml(select.label(item))}</option>`;
+                }).join('');
+                return `<div class="dialog-field"><label>${escapeHtml(label)}</label><select name="${escapeHtml(key)}"${required ? ' required' : ''}><option value="">-- Chọn --</option>${options}</select></div>`;
+            }
+            const type = config.inputTypes?.[key] || 'text';
+            const attributes = Object.entries(config.inputAttributes?.[key] || {})
+                .map(([name, value]) => `${escapeHtml(name)}="${escapeHtml(value)}"`).join(' ');
+            return `<div class="dialog-field"><label>${escapeHtml(label)}</label><input name="${escapeHtml(key)}" type="${escapeHtml(type)}" value="${type === 'password' ? '' : escapeHtml(record?.[key] == null ? '' : String(record[key]))}"${required ? ' required' : ''}${attributes ? ` ${attributes}` : ''} /></div>`;
+        }).join('');
     const actions = form.querySelector('.dialog-actions');
     const fieldContainer = document.createElement('div');
     fieldContainer.className = 'dialog-fields';
     fieldContainer.innerHTML = fields;
     form.insertBefore(fieldContainer, actions);
-    status.textContent = '';
+    status.textContent = config.formNotice || '';
     dialog.showModal();
     form.onsubmit = async (event) => {
         event.preventDefault();
@@ -744,8 +795,8 @@ async function renderNotifications() {
 async function renderAccountManager() {
     portalContent.innerHTML = `
         <section class="page-heading">
-            <div><h2>Quản lý tài khoản</h2><p>Tạo tài khoản cho sinh viên/giảng viên, khóa/mở khóa và hỗ trợ đặt lại mật khẩu.</p></div>
-            <button type="button" class="primary-button" id="createAccountButton"><i class="bi bi-person-plus"></i>Tạo tài khoản</button>
+            <div><h2>Quản lý tài khoản</h2><p>Xem tài khoản, khóa/mở khóa, đặt lại mật khẩu và phân quyền. Tài khoản STUDENT/LECTURER được tạo từ hồ sơ tương ứng.</p></div>
+            <button type="button" class="primary-button" id="createAccountButton"><i class="bi bi-person-plus"></i>Tạo tài khoản đặc biệt</button>
         </section>
         <section class="panel-card resource-card">
             <div class="resource-toolbar">
@@ -761,8 +812,15 @@ async function renderAccountManager() {
 }
 
 async function loadAccountTable() {
-    const accounts = await nestRequest('/admin/users').catch(() => []);
     const search = document.getElementById('accountSearch');
+    let accounts;
+    try {
+        accounts = await springRequest('/auth/accounts');
+    } catch (error) {
+        document.getElementById('accountTable').innerHTML =
+            `<div class="empty-state"><strong>Không tải được danh sách tài khoản</strong><span>${escapeHtml(error.message)}</span></div>`;
+        return;
+    }
     const render = () => {
         const keyword = search.value.trim().toLocaleLowerCase('vi');
         const filtered = accounts.filter((account) =>
@@ -779,6 +837,7 @@ async function loadAccountTable() {
                     <td>${account.isActive ? '<span class="status-badge active">Đang hoạt động</span>' : '<span class="status-badge muted">Đã khóa</span>'}</td>
                     <td class="table-actions">
                         <button type="button" class="status-action approve" data-account-action="toggle" data-account-id="${escapeHtml(account.id)}" data-account-active="${account.isActive ? '1' : '0'}">${account.isActive ? 'Khóa' : 'Mở khóa'}</button>
+                        <button type="button" class="status-action" data-account-action="roles" data-account-id="${escapeHtml(account.id)}">Phân quyền</button>
                         <button type="button" class="status-action reject" data-account-action="reset" data-account-id="${escapeHtml(account.id)}">Đặt lại mật khẩu</button>
                     </td>
                 </tr>`).join('')}
@@ -788,11 +847,14 @@ async function loadAccountTable() {
             button.addEventListener('click', async () => {
                 if (button.dataset.accountAction === 'toggle') {
                     const active = button.dataset.accountActive !== '1';
-                    await nestRequest(`/admin/users/${encodeURIComponent(button.dataset.accountId)}/lock`, {
+                    await springRequest(`/auth/accounts/${encodeURIComponent(button.dataset.accountId)}/status`, {
                         method: 'PATCH',
                         body: JSON.stringify({ active })
                     }).catch((error) => alert(error.message));
                     await loadAccountTable();
+                } else if (button.dataset.accountAction === 'roles') {
+                    const account = accounts.find((item) => item.id === button.dataset.accountId);
+                    if (account) openAccountRolesDialog(account);
                 } else {
                     openResetPasswordDialog(button.dataset.accountId);
                 }
@@ -803,53 +865,87 @@ async function loadAccountTable() {
 }
 
 async function openCreateAccountDialog() {
-    const [students, lecturers] = await Promise.all([
-        springRequest('/students').catch(() => []),
-        springRequest('/lecturers').catch(() => [])
-    ]);
+    let roles;
+    try {
+        roles = await springRequest('/auth/independent-roles');
+    } catch (error) {
+        alert(error.message);
+        return;
+    }
     const dialog = document.createElement('dialog');
     dialog.className = 'unified-dialog';
     dialog.innerHTML = `
         <form id="createManagedAccountForm">
-            <div class="dialog-heading"><div><small>QUẢN LÝ TÀI KHOẢN</small><h2>Tạo tài khoản giảng viên/sinh viên</h2></div><button type="button" class="dialog-close account-close"><i class="bi bi-x-lg"></i></button></div>
+            <div class="dialog-heading"><div><small>QUẢN LÝ TÀI KHOẢN</small><h2>Tạo tài khoản đặc biệt</h2></div><button type="button" class="dialog-close account-close"><i class="bi bi-x-lg"></i></button></div>
             <div class="dialog-fields">
-                <div class="dialog-field"><label>Loại tài khoản</label><select name="type" id="managedAccountType"><option value="STUDENT">Sinh viên</option><option value="LECTURER">Giảng viên</option></select></div>
-                <div class="dialog-field"><label>Hồ sơ</label><select name="identityId" id="managedIdentity" required></select></div>
+                <div class="dialog-field"><label>Role</label><select name="roleCode" required>${roles.map((role) => `<option value="${escapeHtml(role)}">${escapeHtml(translateRoles([role]))}</option>`).join('')}</select></div>
                 <div class="dialog-field"><label>Tên đăng nhập</label><input name="username" required minlength="3" maxlength="100" /></div>
-                <div class="dialog-field"><label>Email</label><input name="email" type="email" required maxlength="255" /></div>
+                <div class="dialog-field"><label>Họ và tên hiển thị</label><input name="displayName" required maxlength="255" /></div>
                 <div class="dialog-field"><label>Mật khẩu</label><input name="password" type="password" required minlength="12" maxlength="72" /></div>
             </div>
-            <p id="createManagedStatus" class="dialog-status"></p>
-            <div class="dialog-actions"><button type="button" class="outline-button account-close">Hủy</button><button type="submit" class="primary-button">Tạo tài khoản</button></div>
+            <p id="createManagedStatus" class="dialog-status">${roles.length ? '' : 'Không có role độc lập đang hoạt động.'}</p>
+            <div class="dialog-actions"><button type="button" class="outline-button account-close">Hủy</button><button type="submit" class="primary-button" ${roles.length ? '' : 'disabled'}>Tạo tài khoản</button></div>
         </form>`;
     document.body.append(dialog);
     dialog.showModal();
     dialog.querySelectorAll('.account-close').forEach((button) => button.addEventListener('click', () => dialog.close()));
     dialog.addEventListener('close', () => dialog.remove());
 
-    const typeSelect = dialog.querySelector('#managedAccountType');
-    const identitySelect = dialog.querySelector('#managedIdentity');
-    const updateIdentityOptions = () => {
-        const identities = typeSelect.value === 'STUDENT' ? students : lecturers;
-        identitySelect.innerHTML = identities.map((item) => {
-            const code = item.studentCode || item.code || item.lecturerCode;
-            const name = item.fullName || item.name;
-            return `<option value="${escapeHtml(item.id)}">${escapeHtml([code, name].filter(Boolean).join(' — '))}</option>`;
-        }).join('');
-    };
-    typeSelect.addEventListener('change', updateIdentityOptions);
-    updateIdentityOptions();
-
     dialog.querySelector('#createManagedAccountForm').addEventListener('submit', async (event) => {
         event.preventDefault();
         const status = dialog.querySelector('#createManagedStatus');
         const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
+        payload.roles = [payload.roleCode];
+        delete payload.roleCode;
         try {
-            await nestRequest('/admin/users/create-managed', {
+            await springRequest('/auth/accounts', {
                 method: 'POST',
                 body: JSON.stringify(payload)
             });
             status.textContent = 'Tạo tài khoản thành công.';
+            await loadAccountTable();
+            setTimeout(() => dialog.close(), 650);
+        } catch (error) {
+            status.textContent = error.message;
+        }
+    });
+}
+
+async function openAccountRolesDialog(account) {
+    let availableRoles;
+    try {
+        availableRoles = await springRequest('/auth/roles');
+    } catch (error) {
+        alert(error.message);
+        return;
+    }
+
+    const assignedRoles = new Set(String(account.roles || '').split(',').filter(Boolean));
+    const dialog = document.createElement('dialog');
+    dialog.className = 'unified-dialog';
+    dialog.innerHTML = `
+        <form id="accountRolesForm">
+            <div class="dialog-heading"><div><small>QUẢN LÝ TÀI KHOẢN</small><h2>Phân quyền: ${escapeHtml(account.username)}</h2></div><button type="button" class="dialog-close roles-close"><i class="bi bi-x-lg"></i></button></div>
+            <div class="dialog-fields" style="grid-template-columns:1fr">
+                ${availableRoles.map((role) => `<label class="dialog-field"><span><input type="checkbox" name="roles" value="${escapeHtml(role)}" ${assignedRoles.has(role) ? 'checked' : ''} /> ${escapeHtml(translateRoles([role]))}</span></label>`).join('')}
+            </div>
+            <p id="accountRolesStatus" class="dialog-status"></p>
+            <div class="dialog-actions"><button type="button" class="outline-button roles-close">Hủy</button><button type="submit" class="primary-button">Lưu phân quyền</button></div>
+        </form>`;
+    document.body.append(dialog);
+    dialog.showModal();
+    dialog.querySelectorAll('.roles-close').forEach((button) => button.addEventListener('click', () => dialog.close()));
+    dialog.addEventListener('close', () => dialog.remove());
+    dialog.querySelector('#accountRolesForm').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const status = dialog.querySelector('#accountRolesStatus');
+        const roles = Array.from(dialog.querySelectorAll('input[name="roles"]:checked'), (input) => input.value);
+        try {
+            await springRequest(`/auth/accounts/${encodeURIComponent(account.id)}/roles`, {
+                method: 'PATCH',
+                body: JSON.stringify({ roles })
+            });
+            status.textContent = 'Đã cập nhật phân quyền.';
             await loadAccountTable();
             setTimeout(() => dialog.close(), 650);
         } catch (error) {
@@ -866,7 +962,6 @@ function openResetPasswordDialog(userId) {
             <div class="dialog-heading"><div><small>HỖ TRỢ TÀI KHOẢN</small><h2>Đặt lại mật khẩu</h2></div><button type="button" class="dialog-close reset-close"><i class="bi bi-x-lg"></i></button></div>
             <div class="dialog-fields" style="grid-template-columns:1fr">
                 <div class="dialog-field"><label>Mật khẩu mới</label><input name="password" type="password" required minlength="12" maxlength="72" /></div>
-                <div class="dialog-field"><label>Ghi chú hỗ trợ</label><input name="detail" maxlength="1000" /></div>
             </div>
             <p id="resetPasswordStatus" class="dialog-status"></p>
             <div class="dialog-actions"><button type="button" class="outline-button reset-close">Hủy</button><button type="submit" class="primary-button">Cập nhật mật khẩu</button></div>
@@ -880,11 +975,12 @@ function openResetPasswordDialog(userId) {
         const status = dialog.querySelector('#resetPasswordStatus');
         const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
         try {
-            await nestRequest(`/admin/users/${encodeURIComponent(userId)}/reset-password`, {
-                method: 'PATCH',
+            await springRequest(`/auth/accounts/${encodeURIComponent(userId)}/password`, {
+                method: 'POST',
                 body: JSON.stringify(payload)
             });
             status.textContent = 'Đặt lại mật khẩu thành công.';
+            await loadAccountTable();
             setTimeout(() => dialog.close(), 650);
         } catch (error) {
             status.textContent = error.message;

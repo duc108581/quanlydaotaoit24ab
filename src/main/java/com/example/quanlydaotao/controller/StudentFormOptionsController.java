@@ -88,7 +88,7 @@ public class StudentFormOptionsController {
                            PARTITION BY code, name
                            ORDER BY id
                        ) AS row_number
-                FROM student_status
+                FROM student_statuses
                 WHERE deleted_at IS NULL
                   AND (is_active = 1 OR is_active IS NULL)
             )

@@ -6,9 +6,7 @@ import com.example.quanlydaotao.entity.LecturerCourseClass;
 
 public interface LecturerCourseClassRepository extends SoftDeleteRepository<LecturerCourseClass> {
 
-    boolean existsByLecturerIdAndCourseClassIdAndIsActiveTrueAndDeletedAtIsNull(
-            UUID lecturerId, UUID courseClassId);
+    boolean existsByCourseSectionIdAndIsActiveTrueAndDeletedAtIsNull(UUID courseSectionId);
 
-    boolean existsByLecturerIdAndCourseClassIdAndIsActiveTrueAndDeletedAtIsNullAndIdNot(
-            UUID lecturerId, UUID courseClassId, UUID id);
+    boolean existsByCourseSectionIdAndIsActiveTrueAndDeletedAtIsNullAndIdNot(UUID courseSectionId, UUID id);
 }

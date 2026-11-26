@@ -18,7 +18,6 @@ public class ApiAuthenticationInterceptor implements HandlerInterceptor {
 
     private static final Set<String> PUBLIC_ENDPOINTS = Set.of(
             "/api/auth/login",
-            "/api/auth/register",
             "/api/auth/forgot-password",
             "/api/auth/reset-password",
             "/api/auth/refresh",
@@ -46,7 +45,8 @@ public class ApiAuthenticationInterceptor implements HandlerInterceptor {
             response.getWriter().write("{\"message\":\"Vui lòng đăng nhập bằng access token hợp lệ.\"}");
             return false;
         }
-        if (!path.startsWith("/api/auth/") && !"ADMIN".equalsIgnoreCase(user.role())) {
+        boolean adminRequired = !"/api/auth/me".equals(path);
+        if (adminRequired && !user.roles().contains("ADMIN")) {
             response.setStatus(HttpServletResponse.SC_FORBIDDEN);
             response.setContentType(MediaType.APPLICATION_JSON_VALUE);
             response.getWriter().write("{\"message\":\"Bạn không có quyền thực hiện thao tác này.\"}");

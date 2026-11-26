@@ -1,6 +1,7 @@
 package com.example.quanlydaotao.service;
 
 import java.util.UUID;
+import java.util.Locale;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -43,6 +44,7 @@ public class TrainingProgramService extends AbstractCrudService<TrainingProgram>
 
     private void validate(TrainingProgram program, UUID currentId) {
         program.setCode(clean(program.getCode()));
+        if (program.getCode() != null) program.setCode(program.getCode().toUpperCase(Locale.ROOT));
         program.setName(clean(program.getName()));
         if (program.getCode() == null || program.getName() == null
                 || program.getDepartmentId() == null || program.getMajorId() == null) {
@@ -63,8 +65,8 @@ public class TrainingProgramService extends AbstractCrudService<TrainingProgram>
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Ngày kết thúc phải sau ngày hiệu lực");
         }
         boolean duplicate = currentId == null
-                ? repository.existsByCodeIgnoreCase(program.getCode())
-                : repository.existsByCodeIgnoreCaseAndIdNot(program.getCode(), currentId);
+                ? repository.existsByCodeAndDeletedAtIsNull(program.getCode())
+                : repository.existsByCodeAndDeletedAtIsNullAndIdNot(program.getCode(), currentId);
         if (duplicate) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Mã chương trình đào tạo đã tồn tại");
         }

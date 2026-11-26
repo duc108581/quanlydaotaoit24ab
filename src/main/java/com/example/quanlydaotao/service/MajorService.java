@@ -1,6 +1,7 @@
 package com.example.quanlydaotao.service;
 
 import java.util.UUID;
+import java.util.Locale;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -36,6 +37,7 @@ public class MajorService extends AbstractCrudService<Major> {
 
     private void validate(Major major, UUID currentId) {
         major.setCode(clean(major.getCode()));
+        if (major.getCode() != null) major.setCode(major.getCode().toUpperCase(Locale.ROOT));
         major.setName(clean(major.getName()));
         if (major.getCode() == null || major.getName() == null || major.getDepartmentId() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Mã, tên ngành và khoa là bắt buộc");
@@ -44,8 +46,8 @@ public class MajorService extends AbstractCrudService<Major> {
                 .filter(department -> !Boolean.FALSE.equals(department.getIsActive()))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Khoa không tồn tại hoặc đã ngừng hoạt động"));
         boolean duplicate = currentId == null
-                ? repository.existsByCodeIgnoreCase(major.getCode())
-                : repository.existsByCodeIgnoreCaseAndIdNot(major.getCode(), currentId);
+                ? repository.existsByCodeAndDeletedAtIsNull(major.getCode())
+                : repository.existsByCodeAndDeletedAtIsNullAndIdNot(major.getCode(), currentId);
         if (duplicate) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Mã ngành đã tồn tại");
         }
