@@ -1,9 +1,12 @@
-const nestApi = '/api';
+const nestApi = window.NEST_API_BASE_URL
+    || `${window.location.protocol}//${window.location.hostname}:3000/api`;
+const springApi = '/api';
 const state = {
     accessToken: localStorage.getItem('nestAccessToken') || '',
     refreshToken: localStorage.getItem('nestRefreshToken') || '',
     user: null
 };
+let refreshInProgress;
 
 const loginForm = document.getElementById('loginForm');
 const registerForm = document.getElementById('registerForm');
@@ -16,11 +19,52 @@ function setStatus(element, message, success = false) {
     element.classList.toggle('success', success);
 }
 
+async function refreshAccessToken() {
+    if (!state.refreshToken) return false;
+    if (!refreshInProgress) {
+        refreshInProgress = (async () => {
+            const response = await fetch(`${springApi}/auth/refresh`, {
+                method: 'POST',
+                headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+                body: JSON.stringify({ refreshToken: state.refreshToken })
+            });
+            const payload = await response.json().catch(() => null);
+            if (!response.ok) {
+                saveTokens('', '');
+                return false;
+            }
+            saveTokens(payload.accessToken, payload.refreshToken);
+            return true;
+        })();
+    }
+    try {
+        return await refreshInProgress;
+    } finally {
+        refreshInProgress = null;
+    }
+}
+
 async function request(path, options = {}) {
     const headers = { Accept: 'application/json', ...(options.headers || {}) };
     if (options.body) headers['Content-Type'] = 'application/json';
     if (state.accessToken) headers.Authorization = `Bearer ${state.accessToken}`;
-    const response = await fetch(`${nestApi}${path}`, { ...options, headers });
+    const baseUrl = path.startsWith('/auth/') ? springApi : nestApi;
+    const url = `${baseUrl}${path}`;
+    let response = await fetch(url, { ...options, headers });
+    const publicAuthPaths = [
+        '/auth/login',
+        '/auth/register',
+        '/auth/forgot-password',
+        '/auth/reset-password',
+        '/auth/refresh',
+        '/auth/logout'
+    ];
+    if (response.status === 401 && state.refreshToken && !publicAuthPaths.includes(path)) {
+        if (await refreshAccessToken()) {
+            headers.Authorization = `Bearer ${state.accessToken}`;
+            response = await fetch(url, { ...options, headers });
+        }
+    }
     if (response.status === 204) return null;
     let payload = null;
     try {
@@ -37,9 +81,9 @@ async function request(path, options = {}) {
 function saveTokens(accessToken, refreshToken) {
     state.accessToken = accessToken || '';
     state.refreshToken = refreshToken || '';
-    if (accessToken) localStorage.setItem('nestAccessToken', accessToken);
+    if (state.accessToken) localStorage.setItem('nestAccessToken', state.accessToken);
     else localStorage.removeItem('nestAccessToken');
-    if (refreshToken) localStorage.setItem('nestRefreshToken', refreshToken);
+    if (state.refreshToken) localStorage.setItem('nestRefreshToken', state.refreshToken);
     else localStorage.removeItem('nestRefreshToken');
 }
 
@@ -215,45 +259,45 @@ async function loadReports() {
     } catch (error) {
         container.textContent = error.message;
     }
+}
 
-    async function loadAdminRegistrations() {
-        const container = document.getElementById('adminRegistrations');
-        container.textContent = 'Đang tải...';
-        try {
-            const registrations = await request('/course-registrations/admin/all');
-            container.replaceChildren();
-            if (!registrations.length) {
-                container.textContent = 'Chưa có đăng ký nào.';
-                return;
-            }
-            registrations.forEach((registration) => {
-                const item = document.createElement('div');
-                item.className = 'nest-item';
-                item.innerHTML = `
-                    <div><strong>${escapeHtml(registration.studentCode || 'Không rõ mã SV')}</strong> — ${escapeHtml(registration.studentName || '')}<br>
-                    <small>${escapeHtml(registration.sectionCode || '')} · ${escapeHtml(registration.courseName || registration.sectionName || '')} · ${escapeHtml(registration.status || 'REGISTERED')}</small></div>
-                    <div class="nest-actions">
-                        <button class="btn btn-success btn-sm" type="button" data-status="CONFIRMED">Duyệt</button>
-                        <button class="btn btn-danger btn-sm" type="button" data-status="CANCELLED">Từ chối</button>
-                    </div>`;
-                item.querySelectorAll('[data-status]').forEach((button) => {
-                    button.addEventListener('click', async () => {
-                        try {
-                            await request(`/course-registrations/admin/${encodeURIComponent(registration.id)}/status`, {
-                                method: 'PATCH',
-                                body: JSON.stringify({ status: button.dataset.status })
-                            });
-                            await loadAdminRegistrations();
-                        } catch (error) {
-                            alert(error.message);
-                        }
-                    });
-                });
-                container.append(item);
-            });
-        } catch (error) {
-            container.textContent = error.message;
+async function loadAdminRegistrations() {
+    const container = document.getElementById('adminRegistrations');
+    container.textContent = 'Đang tải...';
+    try {
+        const registrations = await request('/course-registrations/admin/all');
+        container.replaceChildren();
+        if (!registrations.length) {
+            container.textContent = 'Chưa có đăng ký nào.';
+            return;
         }
+        registrations.forEach((registration) => {
+            const item = document.createElement('div');
+            item.className = 'nest-item';
+            item.innerHTML = `
+                <div><strong>${escapeHtml(registration.studentCode || 'Không rõ mã SV')}</strong> — ${escapeHtml(registration.studentName || '')}<br>
+                <small>${escapeHtml(registration.sectionCode || '')} · ${escapeHtml(registration.courseName || registration.sectionName || '')} · ${escapeHtml(registration.status || 'REGISTERED')}</small></div>
+                <div class="nest-actions">
+                    <button class="btn btn-success btn-sm" type="button" data-status="CONFIRMED">Duyệt</button>
+                    <button class="btn btn-danger btn-sm" type="button" data-status="CANCELLED">Từ chối</button>
+                </div>`;
+            item.querySelectorAll('[data-status]').forEach((button) => {
+                button.addEventListener('click', async () => {
+                    try {
+                        await request(`/course-registrations/admin/${encodeURIComponent(registration.id)}/status`, {
+                            method: 'PATCH',
+                            body: JSON.stringify({ status: button.dataset.status })
+                        });
+                        await loadAdminRegistrations();
+                    } catch (error) {
+                        alert(error.message);
+                    }
+                });
+            });
+            container.append(item);
+        });
+    } catch (error) {
+        container.textContent = error.message;
     }
 }
 

@@ -19,3 +19,9 @@ Thumbs.db
 
 # Environment
 .env
+
+# Node.js
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo

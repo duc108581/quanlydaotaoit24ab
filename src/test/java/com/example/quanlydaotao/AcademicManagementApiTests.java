@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -26,6 +27,8 @@ import com.example.quanlydaotao.entity.StudentStatus;
 import com.example.quanlydaotao.repository.CourseRepository;
 import com.example.quanlydaotao.repository.CourseSectionRepository;
 import com.example.quanlydaotao.repository.StudentStatusRepository;
+import com.example.quanlydaotao.service.JwtTokenService;
+import com.example.quanlydaotao.service.JwtTokenService.AuthenticatedUser;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -44,10 +47,20 @@ class AcademicManagementApiTests {
     @Autowired
     private StudentStatusRepository studentStatusRepository;
 
+    @Autowired
+    private JwtTokenService jwtTokenService;
+
     @Value("${local.server.port}")
     private int port;
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
+    private String adminToken;
+
+    @BeforeEach
+    void createAdminAccessToken() {
+        adminToken = jwtTokenService.issueAccessToken(new AuthenticatedUser(
+                UUID.randomUUID().toString(), "test-admin", "Test Admin", "ADMIN", null));
+    }
 
     @Test
     void staticPagesAndApiDocumentationAreReachable() throws Exception {
@@ -334,6 +347,9 @@ class AcademicManagementApiTests {
 
     private HttpResponse<String> send(String url, String method, String body) throws Exception {
         HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(url));
+        if (url.contains("/api/")) {
+            request.header("Authorization", "Bearer " + adminToken);
+        }
         if (body != null) {
             request.header("Content-Type", "application/json")
                     .method(method, HttpRequest.BodyPublishers.ofString(body));

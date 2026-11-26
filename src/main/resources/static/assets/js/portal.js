@@ -1,4 +1,5 @@
-const nestApi = '/api';
+const nestApi = window.NEST_API_BASE_URL
+    || `${window.location.protocol}//${window.location.hostname}:3000/api`;
 const springApi = '/api';
 
 const state = {
@@ -6,6 +7,7 @@ const state = {
     refreshToken: localStorage.getItem('nestRefreshToken') || '',
     user: null
 };
+let refreshInProgress;
 
 const adminMenu = [
     { id: 'dashboard', label: 'Dashboard', icon: 'bi-grid-1x2-fill' },
@@ -36,24 +38,72 @@ const portalContent = document.getElementById('portalContent');
 const portalTitle = document.getElementById('portalTitle');
 const portalBreadcrumb = document.getElementById('portalBreadcrumb');
 
-async function nestRequest(path, options = {}) {
+function saveTokens(accessToken, refreshToken) {
+    state.accessToken = accessToken || '';
+    state.refreshToken = refreshToken || '';
+    if (state.accessToken) localStorage.setItem('nestAccessToken', state.accessToken);
+    else localStorage.removeItem('nestAccessToken');
+    if (state.refreshToken) localStorage.setItem('nestRefreshToken', state.refreshToken);
+    else localStorage.removeItem('nestRefreshToken');
+}
+
+async function refreshAccessToken() {
+    if (!state.refreshToken) return false;
+    if (!refreshInProgress) {
+        refreshInProgress = (async () => {
+            const response = await fetch(`${springApi}/auth/refresh`, {
+                method: 'POST',
+                headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+                body: JSON.stringify({ refreshToken: state.refreshToken })
+            });
+            const payload = await response.json().catch(() => null);
+            if (!response.ok) {
+                saveTokens('', '');
+                return false;
+            }
+            saveTokens(payload.accessToken, payload.refreshToken);
+            return true;
+        })();
+    }
+    try {
+        return await refreshInProgress;
+    } finally {
+        refreshInProgress = null;
+    }
+}
+
+async function apiRequest(baseUrl, path, options = {}) {
     const headers = { Accept: 'application/json', ...(options.headers || {}) };
     if (options.body) headers['Content-Type'] = 'application/json';
     if (state.accessToken) headers.Authorization = `Bearer ${state.accessToken}`;
-    const response = await fetch(`${nestApi}${path}`, { ...options, headers });
-    const payload = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(payload?.message || `Yêu cầu thất bại (HTTP ${response.status})`);
-    return payload;
-}
-
-async function springRequest(path, options = {}) {
-    const headers = { Accept: 'application/json', ...(options.headers || {}) };
-    if (options.body) headers['Content-Type'] = 'application/json';
-    const response = await fetch(`${springApi}${path}`, { ...options, headers });
+    const url = `${baseUrl}${path}`;
+    let response = await fetch(url, { ...options, headers });
+    const publicAuthPaths = [
+        '/auth/login',
+        '/auth/register',
+        '/auth/forgot-password',
+        '/auth/reset-password',
+        '/auth/refresh',
+        '/auth/logout'
+    ];
+    if (response.status === 401 && state.refreshToken && !publicAuthPaths.includes(path)) {
+        if (await refreshAccessToken()) {
+            headers.Authorization = `Bearer ${state.accessToken}`;
+            response = await fetch(url, { ...options, headers });
+        }
+    }
     if (response.status === 204) return null;
     const payload = await response.json().catch(() => null);
     if (!response.ok) throw new Error(payload?.detail || payload?.message || `Yêu cầu thất bại (HTTP ${response.status})`);
     return payload;
+}
+
+async function nestRequest(path, options = {}) {
+    return apiRequest(path.startsWith('/auth/') ? springApi : nestApi, path, options);
+}
+
+async function springRequest(path, options = {}) {
+    return apiRequest(springApi, path, options);
 }
 
 loginForm.addEventListener('submit', async (event) => {
@@ -62,11 +112,8 @@ loginForm.addEventListener('submit', async (event) => {
     const payload = Object.fromEntries(new FormData(loginForm));
     try {
         const result = await nestRequest('/auth/login', { method: 'POST', body: JSON.stringify(payload) });
-        state.accessToken = result.accessToken;
-        state.refreshToken = result.refreshToken;
+        saveTokens(result.accessToken, result.refreshToken);
         state.user = result.user;
-        localStorage.setItem('nestAccessToken', state.accessToken);
-        localStorage.setItem('nestRefreshToken', state.refreshToken);
         showShell();
     } catch (error) {
         loginStatus.textContent = error.message;
@@ -140,11 +187,8 @@ document.getElementById('portalLogout').addEventListener('click', async () => {
             body: JSON.stringify({ refreshToken: state.refreshToken })
         }).catch(() => null);
     }
-    state.accessToken = '';
-    state.refreshToken = '';
+    saveTokens('', '');
     state.user = null;
-    localStorage.removeItem('nestAccessToken');
-    localStorage.removeItem('nestRefreshToken');
     appShell.hidden = true;
     loginScreen.hidden = false;
     loginForm.reset();
@@ -156,10 +200,7 @@ async function restoreSession() {
         state.user = await nestRequest('/auth/me');
         showShell();
     } catch {
-        state.accessToken = '';
-        state.refreshToken = '';
-        localStorage.removeItem('nestAccessToken');
-        localStorage.removeItem('nestRefreshToken');
+        saveTokens('', '');
     }
 }
 
@@ -225,7 +266,7 @@ async function renderAdminDashboard() {
             <article class="panel-card"><div class="panel-heading"><h2>Hoạt động hệ thống</h2></div>
                 <div class="activity-list">
                     <div class="activity-item"><span class="activity-icon green"><i class="bi bi-check-circle"></i></span><div><strong>SQL Server đã kết nối</strong><small>Cơ sở dữ liệu đào tạo đang hoạt động</small></div></div>
-                    <div class="activity-item"><span class="activity-icon blue"><i class="bi bi-cloud-check"></i></span><div><strong>NestJS API đang hoạt động</strong><small>Xác thực, đăng ký và thống kê đã sẵn sàng</small></div></div>
+                    <div class="activity-item"><span class="activity-icon blue"><i class="bi bi-cloud-check"></i></span><div><strong>Spring Boot API</strong><small>Xử lý xác thực và nghiệp vụ quản lý đào tạo</small></div></div>
                     <div class="activity-item"><span class="activity-icon violet"><i class="bi bi-shield-check"></i></span><div><strong>Tài khoản Admin đã xác thực</strong><small>Toàn quyền quản trị và theo dõi đăng ký</small></div></div>
                 </div>
             </article>

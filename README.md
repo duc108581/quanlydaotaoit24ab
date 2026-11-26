@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This project aims to develop a web platform for University Training Management System supply at University Viet Nam. The platform will leverage Spring Boot Web API for the backend, Bootstrap/ReactJS for the frontend, and SQL Server for the database.
+This project aims to develop a web platform for University Training Management System supply at University Viet Nam. The platform uses Spring Boot and NestJS APIs, Bootstrap/ReactJS for the frontend, and SQL Server for the database.
 
 ## Objectives
 
@@ -15,7 +15,7 @@ This project aims to develop a web platform for University Training Management S
 ## Scope
 
 - **Frontend**: Bootstrap/ReactJS application for users to interact with the platform.
-- **Backend**: Spring Boot Web API to handle business logic and data management.
+- **Backend**: Spring Boot for authentication and academic CRUD; NestJS for course registration, notifications, and registration reports.
 - **Database**: SQL Server to store and manage event and ticket information.
 - **Authentication & Authorization**: Secure login and role-based access control.
 - **Notifications**: Real-time updates and email notifications for users use Firebase,...
@@ -36,6 +36,41 @@ The academic management screen is available at `/academic.html`. It supports lis
 Each collection supports `GET` to list records that have not been soft-deleted, `GET /{id}` to retrieve one record, `POST` to create, `PUT /{id}` to replace/update, and `DELETE /{id}` to soft-delete. Deleted rows receive `deleted_at` and are excluded from normal reads; deletion also sets `is_active` to false. New records receive UUID identifiers and audit timestamps.
 
 The six table definitions and the student columns required by the application are added to `database/quanlydaotao.sql` using create-if-missing/add-if-missing statements. Existing student rows are preserved, and the sample student records are inserted only when the table is empty. Run the script against the `QuanLyDaoTao` database configured by the application.
+
+## Spring Boot and NestJS services
+
+The application uses Spring Boot for sign-in and token issuance, and a separate NestJS service for course registration. Both backends verify the same HS256 access JWT using the same `JWT_SECRET`. Spring Boot stores only SHA-256 hashes of refresh tokens; refresh calls rotate the token and invalidate its previous value. Access JWTs expire after 15 minutes; refresh tokens expire after 30 days.
+
+### Start the services
+
+1. Apply `database/quanlydaotao.sql`, `database/add-notifications.sql`, and `database/add-refresh-tokens.sql` to the SQL Server database.
+2. Set `JWT_SECRET` to the same random value of at least 32 characters for both applications. Set `INITIAL_ADMIN_PASSWORD` to a strong initial password for the seeded `admin` account. Do not commit either secret.
+3. Configure Spring Boot database settings with `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, and `SPRING_DATASOURCE_PASSWORD`, then start it on port 8080:
+
+   ```powershell
+   mvn spring-boot:run
+   ```
+
+4. In `nest-backend`, copy `.env.example` to `.env`, set the same `JWT_SECRET` and the SQL Server connection values, then install and start NestJS on port 3000:
+
+   ```powershell
+   npm install
+   npm run start:dev
+   ```
+
+The frontend defaults to the NestJS API at `http://<current-host>:3000/api`; set `window.NEST_API_BASE_URL` before loading the frontend scripts to override it. Configure `WEB_ORIGINS` in NestJS when the Spring-served frontend uses another origin.
+
+### API ownership
+
+| Backend | APIs | Purpose |
+| --- | --- | --- |
+| Spring Boot | `/api/auth/login`, `/api/auth/register`, `/api/auth/refresh`, `/api/auth/logout`, `/api/auth/me` | Sign-in, student account creation, token refresh and identity |
+| Spring Boot | Other `/api/**` academic CRUD endpoints | Existing academic administration; requires an `ADMIN` JWT |
+| NestJS | `/api/course-registrations/**` | Open sections, student registration/cancellation, administrator review |
+| NestJS | `/api/notifications/**` | User notifications and read status |
+| NestJS | `/api/reports/**` | Registration totals and section capacity reports |
+
+NestJS uses DTOs, `class-validator`, a global `ValidationPipe`, JWT authentication, and role guards. Registration checks reuse `course_sections` and `student_course_sections` and execute capacity/duplicate checks in a serializable SQL transaction. No new registration tables are required. Persistent notification delivery requires the existing `notifications` migration.
 
 ## Task Board (Scrum)
 
