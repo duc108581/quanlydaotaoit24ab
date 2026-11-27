@@ -12,7 +12,7 @@ import jakarta.persistence.Transient;
 @Table(name = "lecturer_course_sections")
 public class LecturerCourseClass extends AuditedEntity {
 
-    @Column(name = "lecturer_id")
+    @Column(name = "lecturer_id", nullable = false)
     private UUID lecturerId;
 
     @Column(name = "course_section_id", nullable = false)

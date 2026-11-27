@@ -5,6 +5,6 @@ import java.util.UUID;
 import com.example.quanlydaotao.entity.Department;
 
 public interface DepartmentRepository extends SoftDeleteRepository<Department> {
-    boolean existsByCodeAndDeletedAtIsNull(String code);
-    boolean existsByCodeAndDeletedAtIsNullAndIdNot(String code, UUID id);
+    boolean existsByCode(String code);
+    boolean existsByCodeAndIdNot(String code, UUID id);
 }

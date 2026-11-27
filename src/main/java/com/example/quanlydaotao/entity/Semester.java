@@ -11,13 +11,13 @@ import jakarta.persistence.Table;
 @Table(name = "semesters")
 public class Semester extends AuditedEntity {
 
-    @Column(name = "code", length = 100)
+    @Column(name = "code", length = 100, nullable = false)
     private String code;
 
-    @Column(name = "name", length = 255)
+    @Column(name = "name", length = 255, nullable = false)
     private String name;
 
-    @Column(name = "school_year_id")
+    @Column(name = "school_year_id", nullable = false)
     private UUID schoolYearId;
 
     @Column(name = "start_date")

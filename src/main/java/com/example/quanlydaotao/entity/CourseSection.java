@@ -17,13 +17,13 @@ public class CourseSection extends AuditedEntity {
     @Column(name = "name", length = 255, nullable = false)
     private String name;
 
-    @Column(name = "course_id")
+    @Column(name = "course_id", nullable = false)
     private UUID courseId;
 
     @Column(name = "semester_id", nullable = false)
     private UUID semesterId;
 
-    @Column(name = "grading_scale_id")
+    @Column(name = "grading_scale_id", nullable = false)
     private UUID gradingScaleId;
 
     @Column(name = "max_students")

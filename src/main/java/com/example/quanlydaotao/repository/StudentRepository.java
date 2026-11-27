@@ -23,6 +23,8 @@ public interface StudentRepository extends JpaRepository<Student, UUID> {
 
     boolean existsByEmailAndDeletedAtIsNullAndIdNot(String email, UUID id);
 
+    long countByStudentClassessId(UUID studentClassId);
+
     @Query("""
         SELECT s FROM Student s
         WHERE LOWER(COALESCE(s.code, '')) LIKE LOWER(CONCAT('%', :keyword, '%'))

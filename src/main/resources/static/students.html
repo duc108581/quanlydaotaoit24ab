@@ -314,12 +314,8 @@
                                             </select>
                                         </div>
                                         <div class="col-md-6">
-                                            <label class="form-label">Năm học</label>
-                                            <input id="academicYearYear" type="datetime-local" class="form-control" />
-                                        </div>
-                                        <div class="col-md-6">
-                                            <label class="form-label">Năm nhập học</label>
-                                            <input id="admissionYear" type="datetime-local" class="form-control" />
+                                            <label class="form-label">Năm tuyển sinh</label>
+                                            <input id="admissionYear" type="number" min="1" max="32767" step="1" class="form-control" />
                                         </div>
                                         <div class="col-md-6">
                                             <label class="form-label">Trạng thái hoạt động</label>
@@ -363,7 +359,7 @@
     <script src="/adminlte/js/adminlte.js"></script>
 
 
-    <script type="module" src="/assets/js/student.js"></script>
+    <script type="module" src="/assets/js/student.js?v=2"></script>
 </body>
 
 </html>

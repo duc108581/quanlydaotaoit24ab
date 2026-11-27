@@ -10,13 +10,13 @@ import jakarta.persistence.Table;
 @Table(name = "rooms")
 public class Room extends AuditedEntity {
 
-    @Column(name = "room_code")
+    @Column(name = "room_code", length = 50, nullable = false)
     private String roomCode;
 
-    @Column(name = "room_name")
+    @Column(name = "room_name", length = 255, nullable = false)
     private String roomName;
 
-    @Column(name = "building_id")
+    @Column(name = "building_id", nullable = false)
     private UUID buildingId;
 
     public String getRoomCode() { return roomCode; }

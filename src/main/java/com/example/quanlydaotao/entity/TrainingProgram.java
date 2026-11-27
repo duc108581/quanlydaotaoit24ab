@@ -18,19 +18,19 @@ public class TrainingProgram extends AuditedEntity {
     @Column(name = "name", length = 255, nullable = false)
     private String name;
 
-    @Column(name = "department_id")
+    @Column(name = "department_id", nullable = false)
     private UUID departmentId;
 
-    @Column(name = "major_id")
+    @Column(name = "major_id", nullable = false)
     private UUID majorId;
 
-    @Column(name = "total_credits")
+    @Column(name = "total_credits", precision = 6, scale = 2)
     private BigDecimal totalCredits;
 
     @Column(name = "admission_year")
     private Short admissionYear;
 
-    @Column(name = "duration_years")
+    @Column(name = "duration_years", precision = 4, scale = 1)
     private BigDecimal durationYears;
 
     @Column(name = "effective_date")
@@ -39,10 +39,10 @@ public class TrainingProgram extends AuditedEntity {
     @Column(name = "expiry_date")
     private LocalDate expiryDate;
 
-    @Column(name = "status")
+    @Column(name = "status", length = 30)
     private String status;
 
-    @Column(name = "description")
+    @Column(name = "description", length = 500)
     private String description;
 
     public String getCode() { return code; }

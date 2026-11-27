@@ -40,7 +40,7 @@ public class Student {
     @Column(name = "date_of_birth")
     private LocalDate dateOfBirth;
 
-    @Column(name = "gender")
+    @Column(name = "gender", length = 30)
     private String gender;
 
     @Column(name = "personal_identification_number", length = 20)
@@ -79,7 +79,7 @@ public class Student {
     @Column(name = "admission_year")
     private Short admissionYear;
 
-    @Column(name = "created_at")
+    @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
     @Column(name = "updated_at")
@@ -97,7 +97,7 @@ public class Student {
     @Column(name = "deleted_by")
     private UUID deletedBy;
 
-    @Column(name = "is_active")
+    @Column(name = "is_active", nullable = false)
     private Boolean isActive;
 
     public Student() {

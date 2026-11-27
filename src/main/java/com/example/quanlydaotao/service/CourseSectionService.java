@@ -71,11 +71,11 @@ public class CourseSectionService extends AbstractCrudService<CourseSection> {
                 .filter(course -> !Boolean.FALSE.equals(course.getIsActive()))
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.BAD_REQUEST, "Học phần không tồn tại hoặc đã ngừng hoạt động"));
+        if (section.getGradingScaleId() == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "Vui lòng chọn thang điểm cho lớp học phần");
+        }
         if ("OPEN".equals(section.getStatus())) {
-            if (section.getGradingScaleId() == null) {
-                throw new ResponseStatusException(
-                        HttpStatus.CONFLICT, "Không thể mở lớp khi chưa chọn thang điểm");
-            }
             if (section.getId() == null) {
                 throw new ResponseStatusException(
                         HttpStatus.CONFLICT, "Cần lưu lớp học phần và phân công giảng viên trước khi mở lớp");
@@ -88,8 +88,7 @@ public class CourseSectionService extends AbstractCrudService<CourseSection> {
                     SELECT COUNT(*)
                     FROM grading_scales
                     WHERE id = ?
-                      AND is_active = 1
-                      AND deleted_at IS NULL
+                      AND scale_status = N'ACTIVE'
                     """, Integer.class, section.getGradingScaleId());
             if (activeScaleCount == null || activeScaleCount != 1) {
                 throw new ResponseStatusException(

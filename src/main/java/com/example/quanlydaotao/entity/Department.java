@@ -8,13 +8,13 @@ import jakarta.persistence.Table;
 @Table(name = "departments")
 public class Department extends AuditedEntity {
 
-    @Column(name = "code")
+    @Column(name = "code", length = 100, nullable = false)
     private String code;
 
-    @Column(name = "name")
+    @Column(name = "name", length = 255, nullable = false)
     private String name;
 
-    @Column(name = "description")
+    @Column(name = "description", length = 500)
     private String description;
 
     @Column(name = "established_year")

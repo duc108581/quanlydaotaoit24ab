@@ -52,6 +52,7 @@ class AuthJwtApiTests {
                     username VARCHAR(100) NOT NULL UNIQUE,
                     password_hash VARCHAR(255) NOT NULL,
                     display_name VARCHAR(255),
+                    email VARCHAR(254),
                     is_active INTEGER NOT NULL,
                     created_at TIMESTAMP,
                     updated_at TIMESTAMP
@@ -69,7 +70,7 @@ class AuthJwtApiTests {
                     id UUID PRIMARY KEY,
                     user_id UUID NOT NULL,
                     role_id UUID NOT NULL,
-                    UNIQUE (user_id, role_id)
+                    revoked_at TIMESTAMP
                 )
                 """);
         jdbcTemplate.execute("""
@@ -154,15 +155,17 @@ class AuthJwtApiTests {
         assertEquals(401, send("/api/auth/refresh", "POST", null, """
                 {"refreshToken":"%s"}
                 """.formatted(rotatedRefreshToken)).statusCode());
+        assertEquals(401, send("/api/students", "GET", null, null).statusCode());
         assertTrue(login.path("accessTokenExpiresIn").asLong() > 0);
     }
 
     @Test
     void onlyAdministratorCanProvisionIndependentAccounts() throws Exception {
         String username = "provisioned-" + UUID.randomUUID();
+        String email = "support-" + UUID.randomUUID() + "@example.test";
         String requestBody = """
-                {"username":"%s","displayName":"Provisioned Support","password":"test-password-123","roles":["SUPPORT"]}
-                """.formatted(username);
+                {"username":"%s","displayName":"Provisioned Support","email":"%s","password":"test-password-123","roles":["SUPPORT"]}
+                """.formatted(username, email.toUpperCase(java.util.Locale.ROOT));
         String adminToken = jwtTokenService.issueAccessToken(new AuthenticatedUser(
                 UUID.randomUUID().toString(), "test-admin", "Test Admin", java.util.List.of("ADMIN"), null));
         String studentToken = jwtTokenService.issueAccessToken(new AuthenticatedUser(
@@ -173,8 +176,11 @@ class AuthJwtApiTests {
         assertEquals(201, response.statusCode(), response.body());
         UUID userId = UUID.fromString(objectMapper.readTree(response.body()).path("id").asText());
         assertEquals(1, jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM users WHERE id = ? AND display_name = 'Provisioned Support'",
-                Integer.class, userId));
+                "SELECT COUNT(*) FROM users WHERE id = ? AND display_name = 'Provisioned Support' AND email = ?",
+                Integer.class, userId, email));
+        assertEquals(200, send("/api/auth/login", "POST", null, """
+                {"username":"%s","password":"test-password-123"}
+                """.formatted(email.toUpperCase(java.util.Locale.ROOT))).statusCode());
         assertEquals(1, jdbcTemplate.queryForObject("""
                 SELECT COUNT(*)
                 FROM user_roles assigned
@@ -182,6 +188,9 @@ class AuthJwtApiTests {
                 WHERE assigned.user_id = ?
                   AND role.code = 'SUPPORT'
                 """, Integer.class, userId));
+        assertEquals(409, send("/api/auth/accounts", "POST", "Bearer " + adminToken, """
+                {"username":"duplicate-%s","displayName":"Duplicate Email","email":"%s","password":"test-password-123","roles":["SUPPORT"]}
+                """.formatted(UUID.randomUUID(), email)).statusCode());
         assertEquals(400, send("/api/auth/accounts", "POST", "Bearer " + adminToken, """
                 {"username":"student-%s","displayName":"Independent Student","password":"test-password-123","roles":["STUDENT"]}
                 """.formatted(UUID.randomUUID())).statusCode());
@@ -212,6 +221,90 @@ class AuthJwtApiTests {
         assertEquals(200, send("/api/auth/login", "POST", null, """
                 {"username":"%s","password":"another-password-123"}
                 """.formatted(username)).statusCode());
+        assertEquals(1, jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM user_roles
+                WHERE user_id = ? AND revoked_at IS NOT NULL
+                """, Integer.class, userId));
+        assertEquals(1, jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM user_roles assigned
+                JOIN roles role ON role.id = assigned.role_id
+                WHERE assigned.user_id = ? AND assigned.revoked_at IS NULL
+                  AND role.code = 'AUDITOR'
+                """, Integer.class, userId));
+    }
+
+    @Test
+    void revokedRoleGrantsDoNotAuthenticate() throws Exception {
+        String username = "revoked-" + UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO users
+                    (id, username, password_hash, display_name, is_active, created_at)
+                VALUES (?, ?, 'test-password', 'Revoked Role', 1, CURRENT_TIMESTAMP)
+                """, userId, username);
+        assignRole(userId, "STUDENT");
+        jdbcTemplate.update(
+                "UPDATE user_roles SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = ?",
+                userId);
+
+        assertEquals(401, send("/api/auth/login", "POST", null, """
+                {"username":"%s","password":"test-password"}
+                """.formatted(username)).statusCode());
+    }
+
+    @Test
+    void loginRejectsAnIdentifierThatMatchesDifferentAccounts() throws Exception {
+        String identifier = "shared-" + UUID.randomUUID();
+        createLoginUser(identifier, null);
+        UUID profileOwner = createLoginUser("profile-owner-" + UUID.randomUUID(), null);
+        jdbcTemplate.update("""
+                INSERT INTO students
+                    (id, user_id, code, full_name, current_student_class_id, created_at, is_active)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, TRUE)
+                """, UUID.randomUUID(), profileOwner, identifier, "Collision Test Student", UUID.randomUUID());
+
+        HttpResponse<String> response = send("/api/auth/login", "POST", null, """
+                {"username":"%s","password":"test-password"}
+                """.formatted(identifier));
+        assertEquals(401, response.statusCode());
+    }
+
+    @Test
+    void loginStillAcceptsUniqueStudentAndEmployeeCodes() throws Exception {
+        String studentCode = "student-code-" + UUID.randomUUID();
+        UUID studentOwner = createLoginUser("student-owner-" + UUID.randomUUID(), null);
+        jdbcTemplate.update("""
+                INSERT INTO students
+                    (id, user_id, code, full_name, current_student_class_id, created_at, is_active)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, TRUE)
+                """, UUID.randomUUID(), studentOwner, studentCode, "Code Login Student", UUID.randomUUID());
+
+        String employeeCode = "employee-code-" + UUID.randomUUID();
+        UUID employeeOwner = createLoginUser("employee-owner-" + UUID.randomUUID(), null);
+        jdbcTemplate.update("""
+                INSERT INTO employees
+                    (id, user_id, employee_code, full_name, department_id, created_at, is_active)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, TRUE)
+                """, UUID.randomUUID(), employeeOwner, employeeCode, "Code Login Employee", UUID.randomUUID());
+
+        assertEquals(200, send("/api/auth/login", "POST", null, """
+                {"username":"%s","password":"test-password"}
+                """.formatted(studentCode)).statusCode());
+        assertEquals(200, send("/api/auth/login", "POST", null, """
+                {"username":"%s","password":"test-password"}
+                """.formatted(employeeCode)).statusCode());
+    }
+
+    @Test
+    void loginAcceptsAnIdentifierMatchingMultipleFieldsForOneAccount() throws Exception {
+        String identifier = "same-account-" + UUID.randomUUID();
+        createLoginUser(identifier, identifier);
+
+        assertEquals(200, send("/api/auth/login", "POST", null, """
+                {"username":"%s","password":"test-password"}
+                """.formatted(identifier)).statusCode());
     }
 
     @Test
@@ -293,6 +386,17 @@ class AuthJwtApiTests {
         jdbcTemplate.update(
                 "INSERT INTO user_roles (id, user_id, role_id) VALUES (?, ?, ?)",
                 UUID.randomUUID(), userId, roleId);
+    }
+
+    private UUID createLoginUser(String username, String email) {
+        UUID userId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO users
+                    (id, username, password_hash, display_name, email, is_active, created_at)
+                VALUES (?, ?, 'test-password', ?, ?, 1, CURRENT_TIMESTAMP)
+                """, userId, username, username, email);
+        assignRole(userId, "STUDENT");
+        return userId;
     }
 
     private HttpResponse<String> send(String path, String method, String authorization, String body) throws Exception {

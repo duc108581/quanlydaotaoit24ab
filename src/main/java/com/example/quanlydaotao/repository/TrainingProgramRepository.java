@@ -5,6 +5,6 @@ import java.util.UUID;
 import com.example.quanlydaotao.entity.TrainingProgram;
 
 public interface TrainingProgramRepository extends SoftDeleteRepository<TrainingProgram> {
-    boolean existsByCodeAndDeletedAtIsNull(String code);
-    boolean existsByCodeAndDeletedAtIsNullAndIdNot(String code, UUID id);
+    boolean existsByMajorIdAndCode(UUID majorId, String code);
+    boolean existsByMajorIdAndCodeAndIdNot(UUID majorId, String code, UUID id);
 }

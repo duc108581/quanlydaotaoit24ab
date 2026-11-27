@@ -125,6 +125,23 @@ button, input { font: inherit; }
 .resource-tabs { display: flex; gap: 4px; }
 .resource-tab { min-height: 38px; border: 0; border-radius: 7px; padding: 0 12px; background: transparent; color: var(--muted); cursor: pointer; }
 .resource-tab.active { background: #eff6ff; color: var(--primary); font-weight: 700; }
+.catalog-tabs { justify-content: flex-start; overflow-x: auto; }
+.catalog-toolbar { justify-content: flex-start; flex-wrap: wrap; }
+.class-filter-toolbar { justify-content: flex-start; flex-wrap: wrap; }
+.class-filter-toolbar .search-box { flex: 1 1 250px; }
+.class-filter-toolbar .catalog-filter { flex: 1 1 150px; max-width: none; }
+.class-page-message { margin: 12px 16px; }
+.class-table-footer { justify-content: space-between; gap: 12px; }
+.class-table-footer > div { display: flex; gap: 8px; }
+.class-table-footer button:disabled { cursor: not-allowed; opacity: .5; }
+.catalog-filter { min-height: 40px; max-width: 240px; border: 1px solid #d1d5db; border-radius: 8px; padding: 0 10px; background: #fff; color: #374151; }
+.catalog-checkbox { display: flex; align-items: center; gap: 9px; min-height: 40px; color: #475569; font-size: 13px; font-weight: 650; }
+.catalog-checkbox input { width: 18px; height: 18px; accent-color: var(--primary); }
+.catalog-error { margin: 12px 0; border: 1px solid #fecaca; border-radius: 8px; padding: 12px 14px; background: #fef2f2; color: #991b1b; }
+.catalog-details { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0; padding: 18px; }
+.catalog-details > div { min-width: 0; border-bottom: 1px solid #edf1f5; padding: 8px 0; }
+.catalog-details dt { margin-bottom: 5px; color: var(--muted); font-size: 12px; }
+.catalog-details dd { margin: 0; overflow-wrap: anywhere; }
 
 .table-scroll { overflow: auto; }
 .unified-table { width: 100%; border-collapse: collapse; }
@@ -165,6 +182,7 @@ button, input { font: inherit; }
 .dialog-field label { color: #475569; font-size: 13px; font-weight: 650; }
 .dialog-field input { height: 40px; border: 1px solid #d1d5db; border-radius: 8px; padding: 0 10px; }
 .dialog-field select { height: 40px; border: 1px solid #d1d5db; border-radius: 8px; padding: 0 10px; background: #fff; }
+.dialog-field textarea { min-height: 80px; resize: vertical; border: 1px solid #d1d5db; border-radius: 8px; padding: 9px 10px; font: inherit; }
 .dialog-status { min-height: 20px; margin: 8px 18px 0; color: #dc2626; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--border); }
 
@@ -211,7 +229,10 @@ button, input { font: inherit; }
     .page-heading { align-items: flex-start; flex-direction: column; }
     .resource-toolbar { align-items: stretch; flex-direction: column; }
     .search-box { width: 100%; }
+    .catalog-tabs { flex-direction: row; }
+    .catalog-filter { max-width: none; width: 100%; }
     .dialog-fields { grid-template-columns: 1fr; max-height: 55vh; overflow: auto; }
+    .catalog-details { grid-template-columns: 1fr; }
     .section-card-grid { grid-template-columns: 1fr; }
     .notification-item { grid-template-columns: 42px 1fr; }
     .notification-item > button { grid-column: 2; justify-self: start; }

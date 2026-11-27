@@ -23,7 +23,7 @@ const resources = {
         fields: [
             { name: 'code', label: 'Mã khoa', required: true },
             { name: 'name', label: 'Tên khoa', required: true },
-            { name: 'establishedYear', label: 'Ngày thành lập', type: 'date' },
+            { name: 'establishedYear', label: 'Năm thành lập', type: 'number', min: 1, max: 32767 },
             { name: 'description', label: 'Mô tả', type: 'textarea', wide: true },
             { name: 'isActive', label: 'Đang hoạt động', type: 'checkbox' }
         ]
@@ -51,7 +51,7 @@ const resources = {
             { name: 'name', label: 'Tên chương trình', required: true },
             { name: 'departmentId', label: 'Khoa', type: 'lookup', lookup: 'departments', required: true },
             { name: 'majorId', label: 'Ngành', type: 'lookup', lookup: 'majors', filterField: 'departmentId', filterProperty: 'departmentId', required: true },
-            { name: 'admissionYear', label: 'Khóa tuyển sinh', type: 'date' },
+            { name: 'admissionYear', label: 'Năm tuyển sinh', type: 'number', min: 1, max: 32767 },
             { name: 'durationYears', label: 'Thời gian đào tạo (năm)', type: 'number', min: 1 },
             { name: 'totalCredits', label: 'Tổng số tín chỉ', type: 'number', min: 0 },
             { name: 'effectiveDate', label: 'Ngày hiệu lực', type: 'date' },
@@ -123,12 +123,11 @@ const resources = {
     semesters: {
         title: 'Học kỳ',
         endpoint: API_ENDPOINTS.SEMESTERS,
-        columns: ['code', 'name', 'schoolYearName', 'startDate', 'endDate', 'isActive'],
+        columns: ['code', 'name', 'schoolYearId', 'startDate', 'endDate', 'isActive'],
         fields: [
             { name: 'code', label: 'Mã học kỳ', required: true, placeholder: 'HK1_2025_2026' },
             { name: 'name', label: 'Tên học kỳ', required: true },
             { name: 'schoolYearId', label: 'Năm học', type: 'lookup', lookup: 'school-years', required: true },
-            { name: 'schoolYearName', label: 'Năm học (hiển thị)', placeholder: '2025-2026' },
             { name: 'startDate', label: 'Ngày bắt đầu', type: 'date' },
             { name: 'endDate', label: 'Ngày kết thúc', type: 'date' },
             { name: 'isActive', label: 'Đang hiệu lực', type: 'checkbox' }
@@ -137,35 +136,19 @@ const resources = {
     'course-sections': {
         title: 'Lớp học phần',
         endpoint: API_ENDPOINTS.COURSE_SECTIONS,
-        columns: ['code', 'name', 'courseId', 'semesterId', 'roomId', 'buildingId', 'classType', 'status', 'maxStudents', 'isActive'],
+        columns: ['code', 'name', 'courseId', 'semesterId', 'gradingScaleId', 'classType', 'status', 'maxStudents', 'isActive'],
         fields: [
             { name: 'code', label: 'Mã lớp học phần', required: true, placeholder: 'IT101-01' },
             { name: 'name', label: 'Tên lớp học phần', required: true },
             { name: 'courseId', label: 'Học phần', type: 'lookup', lookup: 'courses', required: true },
             { name: 'semesterId', label: 'Học kỳ', type: 'lookup', lookup: 'semesters', required: true },
-            { name: 'roomId', label: 'Phòng học', type: 'lookup', lookup: 'rooms' },
-            { name: 'buildingId', label: 'Tòa nhà', type: 'lookup', lookup: 'buildings' },
+            { name: 'gradingScaleId', label: 'Thang điểm', type: 'lookup', lookup: 'grading-scales', required: true },
             { name: 'maxStudents', label: 'Sĩ số tối đa', type: 'number', min: 1 },
             { name: 'minStudents', label: 'Sĩ số tối thiểu', type: 'number', min: 0 },
             { name: 'classType', label: 'Loại lớp', type: 'select', options: [['theory', 'Lý thuyết'], ['lab', 'Thực hành'], ['hybrid', 'Kết hợp'], ['repeat', 'Học lại']] },
-            { name: 'status', label: 'Trạng thái', type: 'select', options: [['planned', 'Dự kiến'], ['open', 'Đang mở đăng ký'], ['closed', 'Đã đóng'], ['canceled', 'Đã hủy']] },
+            { name: 'status', label: 'Trạng thái', type: 'select', options: [['DRAFT', 'Dự kiến'], ['OPEN', 'Đang mở đăng ký'], ['CLOSED', 'Đã đóng'], ['COMPLETED', 'Hoàn thành'], ['CANCELLED', 'Đã hủy']] },
             { name: 'registrationStart', label: 'Bắt đầu đăng ký', type: 'datetime-local' },
             { name: 'registrationEnd', label: 'Kết thúc đăng ký', type: 'datetime-local' },
-            { name: 'note', label: 'Ghi chú', type: 'textarea', wide: true },
-            { name: 'isActive', label: 'Đang hiệu lực', type: 'checkbox' }
-        ]
-    },
-    'student-course-sections': {
-        title: 'Sinh viên đăng ký học phần',
-        endpoint: API_ENDPOINTS.STUDENT_COURSE_SECTIONS,
-        columns: ['studentId', 'courseSectionId', 'registrationType', 'status', 'attemptNumber', 'registrationDate'],
-        fields: [
-            { name: 'studentId', label: 'Sinh viên', type: 'lookup', lookup: 'students', required: true },
-            { name: 'courseSectionId', label: 'Lớp học phần', type: 'lookup', lookup: 'course-sections', required: true },
-            { name: 'registrationDate', label: 'Ngày đăng ký', type: 'datetime-local' },
-            { name: 'registrationType', label: 'Loại đăng ký', type: 'select', options: [['Học lần đầu', 'Học lần đầu'], ['Học lại', 'Học lại'], ['Học cải thiện', 'Học cải thiện'], ['Học thay thế', 'Học thay thế']] },
-            { name: 'status', label: 'Trạng thái', type: 'select', options: [['REGISTERED', 'Đã đăng ký'], ['CONFIRMED', 'Đã xác nhận'], ['STUDYING', 'Đang học'], ['COMPLETED', 'Đã hoàn thành'], ['CANCELLED', 'Đã hủy'], ['DROPPED', 'Đã rút học phần']] },
-            { name: 'attemptNumber', label: 'Lần học' },
             { name: 'note', label: 'Ghi chú', type: 'textarea', wide: true },
             { name: 'isActive', label: 'Đang hiệu lực', type: 'checkbox' }
         ]
@@ -189,10 +172,11 @@ const columnLabels = {
     year: 'Niên khóa',
     startDate: 'Bắt đầu',
     endDate: 'Kết thúc',
+    schoolYearId: 'Năm học',
     isActive: 'Hiệu lực',
-    schoolYearName: 'Năm học',
     semesterId: 'Học kỳ',
     courseId: 'Học phần',
+    gradingScaleId: 'Thang điểm',
     roomId: 'Phòng học',
     buildingId: 'Tòa nhà',
     departmentId: 'Khoa',
@@ -241,6 +225,7 @@ const lookupEndpoints = {
     semesters: API_ENDPOINTS.SEMESTERS,
     'academic-years': API_ENDPOINTS.ACADEMIC_YEARS,
     courses: `${API_ENDPOINTS.ACADEMIC_FORM_OPTIONS}/courses`,
+    'grading-scales': `${API_ENDPOINTS.ACADEMIC_FORM_OPTIONS}/grading-scales`,
     rooms: `${API_ENDPOINTS.ACADEMIC_FORM_OPTIONS}/rooms`,
     buildings: `${API_ENDPOINTS.ACADEMIC_FORM_OPTIONS}/buildings`,
     departments: API_ENDPOINTS.DEPARTMENTS,
@@ -262,7 +247,8 @@ const columnLookups = {
     majorId: 'majors',
     trainingProgramId: 'training-programs',
     academicYearId: 'academic-years',
-    advisorId: 'lecturers'
+    advisorId: 'lecturers',
+    schoolYearId: 'school-years'
 };
 
 const columnValueLabels = {
@@ -361,8 +347,13 @@ function selectResource(key) {
     loadRecords();
 }
 
-async function fetchJson(url, options) {
-    const response = await fetch(url, options);
+async function fetchJson(url, options = {}) {
+    const requestOptions = { ...options };
+    const headers = new Headers(requestOptions.headers || {});
+    const accessToken = localStorage.getItem('nestAccessToken');
+    if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
+    requestOptions.headers = headers;
+    const response = await fetch(url, requestOptions);
     if (!response.ok) {
         let message = `Yêu cầu thất bại (HTTP ${response.status})`;
         try {
@@ -371,7 +362,16 @@ async function fetchJson(url, options) {
         } catch {
             // Keep the HTTP status message when the server response is not JSON.
         }
-        throw new Error(message);
+        const statusDescriptions = {
+            400: 'Dữ liệu gửi lên không hợp lệ',
+            401: 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn',
+            403: 'Tài khoản không có quyền thực hiện thao tác này',
+            500: 'Máy chủ gặp lỗi khi xử lý yêu cầu'
+        };
+        const description = statusDescriptions[response.status] || 'Yêu cầu thất bại';
+        const error = new Error(`${description} (HTTP ${response.status}): ${message}`);
+        error.status = response.status;
+        throw error;
     }
     if (response.status === 204) {
         return null;
@@ -592,13 +592,6 @@ async function saveRecord(event) {
         }
     }
 
-    if (activeKey === 'semesters' && payload.schoolYearId) {
-        const year = (lookupData.get('school-years') || []).find((item) =>
-            normalizeIdentifier(item.id) === normalizeIdentifier(payload.schoolYearId));
-        if (year && !payload.schoolYearName) {
-            payload.schoolYearName = year.name || year.code;
-        }
-    }
     if (activeKey === 'course-sections') {
         if (payload.minStudents != null && payload.maxStudents != null && payload.minStudents > payload.maxStudents) {
             showError(elements.formError, 'Sĩ số tối thiểu không được lớn hơn sĩ số tối đa.');

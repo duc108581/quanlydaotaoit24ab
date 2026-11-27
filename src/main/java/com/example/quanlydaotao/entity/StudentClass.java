@@ -10,22 +10,22 @@ import jakarta.persistence.Table;
 @Table(name = "student_classes")
 public class StudentClass extends AuditedEntity {
 
-    @Column(name = "code")
+    @Column(name = "code", length = 100, nullable = false)
     private String code;
 
-    @Column(name = "name")
+    @Column(name = "name", length = 255, nullable = false)
     private String name;
 
-    @Column(name = "academic_year_id")
+    @Column(name = "academic_year_id", nullable = false)
     private UUID academicYearId;
 
-    @Column(name = "department_id")
+    @Column(name = "department_id", nullable = false)
     private UUID departmentId;
 
-    @Column(name = "major_id")
+    @Column(name = "major_id", nullable = false)
     private UUID majorId;
 
-    @Column(name = "training_program_id")
+    @Column(name = "training_program_id", nullable = false)
     private UUID trainingProgramId;
 
     @Column(name = "advisor_id")

@@ -22,9 +22,11 @@ public class StudentFormOptionsController {
     }
 
     @GetMapping("/classes")
-    public List<Map<String, Object>> getClasses() {
-        return jdbcTemplate.queryForList("""
+    public List<Map<String, Object>> getClasses(
+            @RequestParam(defaultValue = "false") boolean includeInactive) {
+        String sql = """
             SELECT c.id, c.code, c.name,
+                   c.is_active AS isActive,
                    c.department_id AS departmentId,
                    c.major_id AS majorId,
                    c.training_program_id AS trainingProgramId,
@@ -35,9 +37,9 @@ public class StudentFormOptionsController {
             FROM student_classes c
             LEFT JOIN academic_years y ON y.id = c.academic_year_id
             WHERE c.deleted_at IS NULL
-              AND (c.is_active = 1 OR c.is_active IS NULL)
-            ORDER BY c.code
-            """);
+            """ + (includeInactive ? "" : " AND (c.is_active = 1 OR c.is_active IS NULL)")
+                + " ORDER BY c.code";
+        return jdbcTemplate.queryForList(sql);
     }
 
     @GetMapping("/departments")

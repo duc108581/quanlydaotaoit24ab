@@ -51,6 +51,27 @@ public class TrainingProgramService extends AbstractCrudService<TrainingProgram>
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST, "Mã, tên chương trình, khoa và ngành là bắt buộc");
         }
+        if (program.getCode().length() > 50 || program.getName().length() > 255
+                || (program.getStatus() != null && program.getStatus().length() > 30)
+                || (program.getDescription() != null && program.getDescription().length() > 500)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "Thông tin chương trình đào tạo vượt quá độ dài cho phép");
+        }
+        if (program.getAdmissionYear() != null && program.getAdmissionYear() < 1) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Năm tuyển sinh phải là năm dương");
+        }
+        if (program.getTotalCredits() != null
+                && (program.getTotalCredits().signum() < 0
+                        || program.getTotalCredits().precision() - program.getTotalCredits().scale() > 4
+                        || program.getTotalCredits().scale() > 2)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Tổng số tín chỉ không hợp lệ");
+        }
+        if (program.getDurationYears() != null
+                && (program.getDurationYears().signum() <= 0
+                        || program.getDurationYears().precision() - program.getDurationYears().scale() > 3
+                        || program.getDurationYears().scale() > 1)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Thời gian đào tạo không hợp lệ");
+        }
         departmentRepository.findByIdAndDeletedAtIsNull(program.getDepartmentId())
                 .filter(department -> !Boolean.FALSE.equals(department.getIsActive()))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Khoa không tồn tại hoặc đã ngừng hoạt động"));
@@ -65,8 +86,8 @@ public class TrainingProgramService extends AbstractCrudService<TrainingProgram>
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Ngày kết thúc phải sau ngày hiệu lực");
         }
         boolean duplicate = currentId == null
-                ? repository.existsByCodeAndDeletedAtIsNull(program.getCode())
-                : repository.existsByCodeAndDeletedAtIsNullAndIdNot(program.getCode(), currentId);
+                ? repository.existsByMajorIdAndCode(program.getMajorId(), program.getCode())
+                : repository.existsByMajorIdAndCodeAndIdNot(program.getMajorId(), program.getCode(), currentId);
         if (duplicate) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Mã chương trình đào tạo đã tồn tại");
         }

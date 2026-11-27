@@ -98,34 +98,34 @@ public class AuthController {
             @RequestAttribute("authenticatedUser") AuthenticatedUser administrator) {
         String username = textValue(request.get("username"));
         String displayName = textValue(request.get("displayName"));
+        String email = textValue(request.get("email"));
         String password = textValue(request.get("password"));
         List<String> roles = roleValues(request.get("roles"));
         if (username == null || username.length() < 3 || username.length() > 100
                 || displayName == null || displayName.length() > 255
                 || password == null || password.length() < 12 || password.length() > 72
-                    || roles.isEmpty()
-                    || request.containsKey("email")) {
+                || roles.isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of(
-                        "message", "Username, displayName, mật khẩu hợp lệ và ít nhất một role là bắt buộc; email được lưu trong hồ sơ sinh viên hoặc nhân viên."));
+                    "message", "Username, displayName, mật khẩu hợp lệ và ít nhất một role là bắt buộc."));
         }
         if (roles.stream().anyMatch(role -> List.of("STUDENT", "LECTURER").contains(role))) {
             return ResponseEntity.badRequest().body(Map.of(
                     "message", "Tài khoản STUDENT và LECTURER phải được tạo cùng hồ sơ tương ứng."));
         }
 
-        UUID userId = accountProvisioningService.createAccount(username, displayName, password, roles);
+        UUID userId = accountProvisioningService.createAccount(username, displayName, email, password, roles);
         return ResponseEntity.status(HttpStatus.CREATED).body(Map.of(
                 "id", userId,
                 "username", username,
                 "displayName", displayName,
+                "email", email == null ? "" : email.trim().toLowerCase(Locale.ROOT),
                 "roles", roles));
     }
 
     @GetMapping("/accounts")
     public List<Map<String, Object>> getAccounts() {
         List<AccountQueryRow> rows = jdbcTemplate.query("""
-                SELECT account.id, account.username, account.display_name,
-                       COALESCE(student.email, employee.email) AS email,
+                SELECT account.id, account.username, account.display_name, account.email,
                        student.id AS student_id, lecturer.id AS lecturer_id,
                        account.is_active, assigned.code AS role_code
                 FROM users account
@@ -138,8 +138,12 @@ public class AuthController {
                 LEFT JOIN lecturers lecturer
                   ON lecturer.id = employee.id
                  AND lecturer.deleted_at IS NULL
-                LEFT JOIN user_roles assignedRole ON assignedRole.user_id = account.id
-                LEFT JOIN roles assigned ON assigned.id = assignedRole.role_id
+                LEFT JOIN user_roles assignedRole
+                  ON assignedRole.user_id = account.id
+                 AND assignedRole.revoked_at IS NULL
+                LEFT JOIN roles assigned
+                  ON assigned.id = assignedRole.role_id
+                 AND assigned.is_active = 1
                 ORDER BY account.username, assigned.code
                 """, (rs, rowNum) -> new AccountQueryRow(
                 rs.getObject("id", UUID.class),
@@ -207,6 +211,7 @@ public class AuthController {
                     WHERE account.is_active = 1
                       AND assigned.is_active = 1
                       AND assigned.code = N'ADMIN'
+                      AND assignedRole.revoked_at IS NULL
                       AND account.id <> ?
                     """, Integer.class, id);
             if (otherActiveAdmins == null || otherActiveAdmins == 0) {
@@ -262,6 +267,7 @@ public class AuthController {
                     WHERE account.is_active = 1
                       AND assigned.is_active = 1
                       AND assigned.code = N'ADMIN'
+                      AND assignedRole.revoked_at IS NULL
                       AND account.id <> ?
                     """, Integer.class, id);
             if (otherActiveAdmins == null || otherActiveAdmins == 0) {
@@ -284,7 +290,12 @@ public class AuthController {
             roleIds.add(matches.get(0));
         }
 
-        jdbcTemplate.update("DELETE FROM user_roles WHERE user_id = ?", id);
+        jdbcTemplate.update("""
+                UPDATE user_roles
+                SET revoked_at = ?
+                WHERE user_id = ?
+                  AND revoked_at IS NULL
+                """, java.sql.Timestamp.from(java.time.Instant.now()), id);
         for (UUID roleId : roleIds) {
             jdbcTemplate.update("""
                     INSERT INTO user_roles (id, user_id, role_id)
@@ -354,22 +365,11 @@ public class AuthController {
                     .body(Map.of("message", "Mã đặt lại không hợp lệ hoặc mật khẩu cần từ 12 đến 72 ký tự."));
         }
         List<UUID> accounts = jdbcTemplate.query("""
-                SELECT id
-                FROM users
-                WHERE username = ?
-                   OR id IN (
-                       SELECT student.user_id
-                       FROM students student
-                       WHERE student.email = ?
-                         AND student.user_id IS NOT NULL
-                       UNION
-                       SELECT employee.user_id
-                       FROM employees employee
-                       WHERE employee.email = ?
-                         AND employee.user_id IS NOT NULL
-                   )
-                """, (rs, rowNum) -> rs.getObject("id", UUID.class),
-                identifier, identifier, identifier);
+            SELECT id
+            FROM users
+            WHERE username = ?
+               OR LOWER(email) = LOWER(?)
+            """, (rs, rowNum) -> rs.getObject("id", UUID.class), identifier, identifier);
         if (accounts.size() != 1) {
             return ResponseEntity.badRequest()
                     .body(Map.of("message", "Không tìm thấy tài khoản duy nhất tương ứng với thông tin đặt lại."));
@@ -389,25 +389,39 @@ public class AuthController {
 
     private AuthenticatedUser findDatabaseUser(String username, String password) {
         List<DatabaseUser> rows = jdbcTemplate.query("""
-                SELECT TOP (1) account.id, account.username, account.password_hash,
+                SELECT account.id, account.username, account.password_hash,
                        account.display_name,
-                       COALESCE(student.code, employee.employee_code) AS profile_code
+                       COALESCE(
+                           (SELECT MIN(student.code)
+                            FROM students student
+                            WHERE student.user_id = account.id),
+                           (SELECT MIN(employee.employee_code)
+                            FROM employees employee
+                            WHERE employee.user_id = account.id)
+                       ) AS profile_code
                 FROM users account
-                LEFT JOIN students student ON student.user_id = account.id
-                LEFT JOIN employees employee ON employee.user_id = account.id
                 WHERE account.is_active = 1
                   AND (account.username = ?
-                    OR student.email = ?
-                    OR employee.email = ?
-                    OR student.code = ?
-                    OR employee.employee_code = ?)
+                    OR LOWER(account.email) = LOWER(?)
+                    OR EXISTS (
+                        SELECT 1
+                        FROM students student
+                        WHERE student.user_id = account.id
+                          AND student.code = ?
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM employees employee
+                        WHERE employee.user_id = account.id
+                          AND employee.employee_code = ?
+                    ))
                 """, (rs, rowNum) -> new DatabaseUser(
                 rs.getString("id"),
                 rs.getString("username"),
                 rs.getString("password_hash"),
                 rs.getString("display_name"),
-                rs.getString("profile_code")), username, username, username, username, username);
-        if (rows.isEmpty()) {
+                rs.getString("profile_code")), username, username, username, username);
+        if (rows.size() != 1) {
             return null;
         }
         DatabaseUser row = rows.get(0);
@@ -430,6 +444,7 @@ public class AuthController {
                 FROM user_roles ur
                 JOIN roles r ON r.id = ur.role_id
                 WHERE ur.user_id = ?
+                  AND ur.revoked_at IS NULL
                   AND r.is_active = 1
                 ORDER BY r.code
                 """, (rs, rowNum) -> normalizeRole(rs.getString("code")), userId);
@@ -456,6 +471,7 @@ public class AuthController {
                   AND account.is_active = 1
                   AND assigned.is_active = 1
                   AND assigned.code = N'ADMIN'
+                  AND assignedRole.revoked_at IS NULL
                 """, Integer.class, id);
         return count != null && count > 0;
     }

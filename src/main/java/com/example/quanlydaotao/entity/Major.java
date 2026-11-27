@@ -11,16 +11,16 @@ import jakarta.persistence.Table;
 @Table(name = "majors")
 public class Major extends AuditedEntity {
 
-    @Column(name = "department_id")
+    @Column(name = "department_id", nullable = false)
     private UUID departmentId;
 
-    @Column(name = "code")
+    @Column(name = "code", length = 50, nullable = false)
     private String code;
 
-    @Column(name = "name")
+    @Column(name = "name", length = 255, nullable = false)
     private String name;
 
-    @Column(name = "description")
+    @Column(name = "description", length = 500)
     private String description;
 
     @Column(name = "effective_date")

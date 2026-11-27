@@ -28,6 +28,9 @@ function validateEnvironment(environment: Record<string, unknown>) {
   if (typeof jwtSecret !== 'string' || jwtSecret.length < 32) {
     throw new Error('JWT_SECRET must contain at least 32 characters.');
   }
+  if (environment.DB_NAME !== 'QuanLyDaoTao_V2') {
+    throw new Error('DB_NAME must be QuanLyDaoTao_V2.');
+  }
   return environment;
 }
 

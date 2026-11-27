@@ -38,13 +38,14 @@ public class InitialAdminBootstrapService {
                 WHERE account.is_active = 1
                   AND role.code = 'ADMIN'
                   AND role.is_active = 1
+                  AND assigned.revoked_at IS NULL
                 """, Integer.class);
         if (activeAdminCount != null && activeAdminCount > 0) {
             return false;
         }
 
         accountProvisioningService.createAccount(
-                normalizedUsername, normalizedDisplayName, password, List.of("ADMIN"));
+                normalizedUsername, normalizedDisplayName, null, password, List.of("ADMIN"));
         return true;
     }
 }

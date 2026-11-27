@@ -19,7 +19,7 @@ public abstract class AuditedEntity {
     @Column(name = "id", nullable = false, updatable = false)
     private UUID id;
 
-    @Column(name = "created_at")
+    @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
     @Column(name = "updated_at")
@@ -37,7 +37,7 @@ public abstract class AuditedEntity {
     @Column(name = "deleted_by")
     private UUID deletedBy;
 
-    @Column(name = "is_active")
+    @Column(name = "is_active", nullable = false)
     private Boolean isActive = true;
 
     @PrePersist

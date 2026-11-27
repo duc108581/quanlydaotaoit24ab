@@ -184,6 +184,8 @@ public class JwtTokenService {
                 FROM user_roles userRole
                 JOIN roles role ON role.id = userRole.role_id
                 WHERE userRole.user_id = ?
+                  AND userRole.revoked_at IS NULL
+                  AND role.is_active = 1
                 ORDER BY role.code
                 """, (rs, rowNum) -> normalizeRole(rs.getString("code")), userId);
     }

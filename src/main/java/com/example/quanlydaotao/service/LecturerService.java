@@ -59,12 +59,14 @@ public class LecturerService extends AbstractCrudService<Lecturer> {
         validate(lecturer, null);
         if (lecturer.getUserId() == null) {
             lecturer.setUserId(accountProvisioningService.createAccount(
-                    lecturer.getLecturerCode(), lecturer.getFullName(),
+                    lecturer.getLecturerCode(), lecturer.getFullName(), lecturer.getEmail(),
                     lecturer.getInitialPassword(), List.of("LECTURER")));
         }
+        validateActiveLecturerAccount(lecturer.getUserId());
         lecturer.setInitialPassword(null);
         Employee employee = toEmployee(lecturer);
         Employee savedEmployee = employeeRepository.save(employee);
+        accountProvisioningService.updateAccountEmail(lecturer.getUserId(), lecturer.getEmail());
         LocalDateTime now = LocalDateTime.now();
         jdbcTemplate.update("""
                 INSERT INTO lecturers (id, lecturer_code, created_at, updated_at, is_active)
@@ -93,12 +95,14 @@ public class LecturerService extends AbstractCrudService<Lecturer> {
         if (lecturer.getPositionId() == null) lecturer.setPositionId(existing.getPositionId());
         if (lecturer.getHireDate() == null) lecturer.setHireDate(existing.getHireDate());
         validate(lecturer, id);
+        validateActiveLecturerAccount(lecturer.getUserId());
         Employee employee = employeeRepository.findByIdAndDeletedAtIsNull(id)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.CONFLICT, "Không tìm thấy hồ sơ nhân sự tương ứng với giảng viên"));
         copyEmployeeFields(lecturer, employee);
         employeeRepository.save(employee);
         Lecturer saved = super.update(id, lecturer);
+        accountProvisioningService.updateAccountEmail(lecturer.getUserId(), lecturer.getEmail());
         if (Boolean.FALSE.equals(saved.getIsActive())) {
             deactivateAccount(lecturer.getUserId());
         }
@@ -173,6 +177,24 @@ public class LecturerService extends AbstractCrudService<Lecturer> {
                     SET is_active = 0, updated_at = ?
                     WHERE id = ?
                     """, LocalDateTime.now(), userId);
+        }
+    }
+
+    private void validateActiveLecturerAccount(UUID userId) {
+        Integer accountCount = jdbcTemplate.queryForObject("""
+                SELECT COUNT(DISTINCT account.id)
+                FROM users account
+                JOIN user_roles assignedRole ON assignedRole.user_id = account.id
+                JOIN roles assigned ON assigned.id = assignedRole.role_id
+                WHERE account.id = ?
+                  AND account.is_active = 1
+                  AND assigned.code = N'LECTURER'
+                  AND assigned.is_active = 1
+                  AND assignedRole.revoked_at IS NULL
+                """, Integer.class, userId);
+        if (accountCount == null || accountCount != 1) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "Tài khoản giảng viên không tồn tại hoặc đã bị vô hiệu hóa");
         }
     }
 

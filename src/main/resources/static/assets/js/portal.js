@@ -12,9 +12,9 @@ let refreshInProgress;
 const adminMenu = [
     { id: 'dashboard', label: 'Dashboard', icon: 'bi-grid-1x2-fill' },
     { id: 'students', label: 'Quản lý sinh viên', icon: 'bi-person-vcard' },
+    { id: 'student-classes', label: 'Quản lý lớp sinh viên', icon: 'bi-people' },
     { id: 'lecturers', label: 'Quản lý giảng viên', icon: 'bi-person-badge' },
-    { id: 'academic-years', label: 'Quản lý niên khóa', icon: 'bi-calendar-range' },
-    { id: 'school-years', label: 'Năm học & học kỳ', icon: 'bi-calendar3' },
+    { id: 'academic-catalogs', label: 'Danh mục đào tạo', icon: 'bi-collection' },
     { id: 'courses', label: 'Quản lý học phần', icon: 'bi-journal-text' },
     { id: 'course-sections', label: 'Quản lý lớp học phần', icon: 'bi-building' },
     { id: 'registrations', label: 'Quản lý đăng ký', icon: 'bi-card-checklist' },
@@ -47,6 +47,24 @@ function saveTokens(accessToken, refreshToken) {
     else localStorage.removeItem('nestRefreshToken');
 }
 
+function clearAuthenticatedState() {
+    saveTokens('', '');
+    state.user = null;
+    appShell.hidden = true;
+    loginScreen.hidden = false;
+    loginForm.reset();
+    loginStatus.textContent = '';
+    portalMenu.replaceChildren();
+    portalContent.replaceChildren();
+    document.querySelectorAll('dialog[open]').forEach((dialog) => dialog.close());
+    document.getElementById('accountRole').textContent = 'Tài khoản';
+    document.getElementById('accountName').textContent = 'Tài khoản';
+    document.getElementById('accountMeta').textContent = 'Vai trò';
+    document.getElementById('accountInitial').textContent = '';
+    portalTitle.textContent = 'Đăng nhập';
+    portalBreadcrumb.textContent = 'Chưa đăng nhập';
+}
+
 async function refreshAccessToken() {
     if (!state.refreshToken) return false;
     if (!refreshInProgress) {
@@ -58,7 +76,7 @@ async function refreshAccessToken() {
             });
             const payload = await response.json().catch(() => null);
             if (!response.ok) {
-                saveTokens('', '');
+                clearAuthenticatedState();
                 return false;
             }
             saveTokens(payload.accessToken, payload.refreshToken);
@@ -94,7 +112,11 @@ async function apiRequest(baseUrl, path, options = {}) {
     }
     if (response.status === 204) return null;
     const payload = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(payload?.detail || payload?.message || `Yêu cầu thất bại (HTTP ${response.status})`);
+    if (!response.ok) {
+        const error = new Error(payload?.detail || payload?.message || `Yêu cầu thất bại (HTTP ${response.status})`);
+        error.status = response.status;
+        throw error;
+    }
     return payload;
 }
 
@@ -181,17 +203,25 @@ function openPasswordRecoveryDialog() {
 }
 
 document.getElementById('portalLogout').addEventListener('click', async () => {
-    if (state.refreshToken) {
-        await nestRequest('/auth/logout', {
-            method: 'POST',
-            body: JSON.stringify({ refreshToken: state.refreshToken })
-        }).catch(() => null);
+    const button = document.getElementById('portalLogout');
+    button.disabled = true;
+    let serverLogoutFailed = false;
+    try {
+        if (state.refreshToken) {
+            await springRequest('/auth/logout', {
+                method: 'POST',
+                body: JSON.stringify({ refreshToken: state.refreshToken })
+            });
+        }
+    } catch {
+        serverLogoutFailed = true;
+    } finally {
+        clearAuthenticatedState();
+        if (serverLogoutFailed) {
+            loginStatus.textContent = 'Đã xóa thông tin đăng nhập trên trình duyệt nhưng không thể xác nhận thu hồi phiên phía máy chủ.';
+        }
+        button.disabled = false;
     }
-    saveTokens('', '');
-    state.user = null;
-    appShell.hidden = true;
-    loginScreen.hidden = false;
-    loginForm.reset();
 });
 
 async function restoreSession() {
@@ -200,11 +230,15 @@ async function restoreSession() {
         state.user = await nestRequest('/auth/me');
         showShell();
     } catch {
-        saveTokens('', '');
+        clearAuthenticatedState();
     }
 }
 
 function showShell() {
+    if (!state.accessToken || !state.user) {
+        clearAuthenticatedState();
+        return;
+    }
     loginScreen.hidden = true;
     appShell.hidden = false;
     const isAdmin = state.user.roles.includes('ADMIN');
@@ -232,6 +266,10 @@ function renderMenu(isAdmin) {
 }
 
 async function navigate(pageId) {
+    if (!state.accessToken || !state.user) {
+        clearAuthenticatedState();
+        return;
+    }
     document.querySelectorAll('.menu-button').forEach((button) =>
         button.classList.toggle('active', button.dataset.page === pageId));
     const item = [...adminMenu, ...studentMenu].find((entry) => entry.id === pageId);
@@ -241,7 +279,9 @@ async function navigate(pageId) {
     if (pageId === 'dashboard') return renderAdminDashboard();
     if (pageId === 'student-dashboard') return renderStudentDashboard();
     if (pageId === 'students') return renderStudentManager();
+    if (pageId === 'student-classes') return renderStudentClasses();
     if (pageId === 'lecturers') return renderSimpleResource('/lecturers', 'lecturer');
+    if (pageId === 'academic-catalogs') return renderAcademicCatalogs();
     if (pageId === 'academic-years') return renderSimpleResource('/academic-years', 'academic-year');
     if (pageId === 'school-years') return renderSchoolYearPage();
     if (pageId === 'courses') return renderSimpleResource('/courses', 'course');
@@ -341,8 +381,22 @@ async function renderStudentDashboard() {
 }
 
 async function renderStudentManager() {
-    const rows = await springRequest('/students').catch(() => []);
-    const classes = await springRequest('/student-form-options/classes').catch(() => []);
+    let rows;
+    let classes;
+    portalContent.innerHTML = '<section class="panel-card"><div class="empty-state"><strong>Đang tải hồ sơ sinh viên...</strong></div></section>';
+    try {
+        [rows, classes] = await Promise.all([
+            springRequest('/students'),
+            springRequest('/student-form-options/classes?includeInactive=true')
+        ]);
+    } catch (error) {
+        portalContent.innerHTML = `
+            <section class="catalog-error" role="alert"><strong>Không tải được dữ liệu sinh viên hoặc lớp.</strong><div>${escapeHtml(error.message)}</div>
+                <button type="button" class="outline-button" id="studentManagerRetry">Thử lại</button></section>`;
+        document.getElementById('studentManagerRetry').addEventListener('click', renderStudentManager);
+        return;
+    }
+    const activeClasses = classes.filter((item) => item.isActive !== false);
     renderResourceShell({
         title: 'Quản lý sinh viên',
         description: 'Thêm, sửa, xóa và tìm kiếm hồ sơ sinh viên.',
@@ -370,15 +424,315 @@ async function renderStudentManager() {
         formSelects: {
             studentClassessId: {
                 rows: classes,
-                label: (item) => [item.code, item.name].filter(Boolean).join(' - ')
+                label: (item) => [item.code, item.name, item.isActive === false ? '(Ngừng hoạt động)' : ''].filter(Boolean).join(' - '),
+                visibleWhen: (item, record) => item.isActive !== false
+                    || normalizeIdentifier(item.id) === normalizeIdentifier(record?.studentClassessId)
             }
         },
-        formNotice: classes.length ? '' : 'Chưa có lớp sinh viên đang hoạt động. Hãy tạo lớp trước khi thêm sinh viên.',
+        formNotice: activeClasses.length ? '' : 'Chưa có lớp sinh viên đang hoạt động. Hãy tạo hoặc kích hoạt lớp trước khi thêm sinh viên.',
         lookupDefinitions: {
             studentClassessId: { rows: classes, codeKey: 'code', nameKey: 'name' }
         },
         addLabel: 'Thêm sinh viên'
     });
+}
+
+async function renderStudentClasses() {
+    portalContent.innerHTML = '<section class="panel-card"><div class="empty-state"><strong>Đang tải lớp sinh viên...</strong></div></section>';
+    let classes;
+    let departments;
+    let majors;
+    let programs;
+    let academicYears;
+    let lecturers;
+    let students;
+    try {
+        [classes, departments, majors, programs, academicYears, lecturers, students] = await Promise.all([
+            springRequest('/student-classes'),
+            springRequest('/departments'),
+            springRequest('/majors'),
+            springRequest('/training-programs'),
+            springRequest('/academic-years'),
+            springRequest('/lecturers'),
+            springRequest('/students?includeInactive=true')
+        ]);
+    } catch (error) {
+        portalContent.innerHTML = `
+            <section class="catalog-error" role="alert"><strong>Không tải được dữ liệu quản lý lớp sinh viên.</strong><div>${escapeHtml(error.message)}</div>
+                <button type="button" class="outline-button" id="studentClassesRetry">Thử lại</button></section>`;
+        document.getElementById('studentClassesRetry').addEventListener('click', renderStudentClasses);
+        return;
+    }
+    const lookup = {
+        departments: new Map(departments.map((item) => [normalizeIdentifier(item.id), item])),
+        majors: new Map(majors.map((item) => [normalizeIdentifier(item.id), item])),
+        programs: new Map(programs.map((item) => [normalizeIdentifier(item.id), item])),
+        academicYears: new Map(academicYears.map((item) => [normalizeIdentifier(item.id), item])),
+        lecturers: new Map(lecturers.map((item) => [normalizeIdentifier(item.id), item]))
+    };
+    const studentCounts = new Map();
+    students.forEach((student) => {
+        const classId = normalizeIdentifier(student.studentClassessId || student.currentStudentClassId);
+        if (classId) studentCounts.set(classId, (studentCounts.get(classId) || 0) + 1);
+    });
+    const display = (map, id) => {
+        const item = map.get(normalizeIdentifier(id));
+        if (!item) return '—';
+        const code = item.code || item.lecturerCode || '';
+        const name = item.name || item.fullName || '';
+        return [code, name].filter(Boolean).join(' - ') || '—';
+    };
+    const state = { keyword: '', departmentId: '', majorId: '', academicYearId: '', status: 'all', page: 1, pageSize: 10 };
+    const getFiltered = () => classes.filter((item) => {
+        const keyword = state.keyword.trim().toLocaleLowerCase('vi');
+        const matchesKeyword = !keyword || `${item.code || ''} ${item.name || ''}`.toLocaleLowerCase('vi').includes(keyword);
+        return matchesKeyword
+            && (!state.departmentId || normalizeIdentifier(item.departmentId) === normalizeIdentifier(state.departmentId))
+            && (!state.majorId || normalizeIdentifier(item.majorId) === normalizeIdentifier(state.majorId))
+            && (!state.academicYearId || normalizeIdentifier(item.academicYearId) === normalizeIdentifier(state.academicYearId))
+            && (state.status === 'all' || (state.status === 'active') === (item.isActive !== false));
+    });
+    portalContent.innerHTML = `
+        <section class="page-heading">
+            <div><h2>Quản lý lớp sinh viên</h2><p>Quản lý lớp theo khoa, ngành, chương trình và niên khóa; lớp có hồ sơ sẽ được ngừng hoạt động thay vì xóa.</p></div>
+            <button type="button" class="primary-button" id="studentClassAdd"><i class="bi bi-plus-lg"></i>Thêm lớp</button>
+        </section>
+        <section class="panel-card resource-card">
+            <div class="resource-toolbar class-filter-toolbar">
+                <div class="search-box"><i class="bi bi-search"></i><input id="studentClassSearch" type="search" placeholder="Tìm mã lớp hoặc tên lớp" /></div>
+                <select class="catalog-filter" id="studentClassDepartment"><option value="">Tất cả khoa</option>${departments.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml([item.code, item.name].filter(Boolean).join(' - '))}</option>`).join('')}</select>
+                <select class="catalog-filter" id="studentClassMajor"><option value="">Tất cả ngành</option>${majors.map((item) => `<option value="${escapeHtml(item.id)}" data-department-id="${escapeHtml(item.departmentId)}">${escapeHtml([item.code, item.name].filter(Boolean).join(' - '))}</option>`).join('')}</select>
+                <select class="catalog-filter" id="studentClassAcademicYear"><option value="">Tất cả niên khóa</option>${academicYears.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml([item.code, item.name, item.year].filter(Boolean).join(' - '))}</option>`).join('')}</select>
+                <select class="catalog-filter" id="studentClassStatus"><option value="all">Mọi trạng thái</option><option value="active">Đang hoạt động</option><option value="inactive">Ngừng hoạt động</option></select>
+                <button type="button" class="outline-button" id="studentClassRefresh"><i class="bi bi-arrow-clockwise"></i>Làm mới</button>
+            </div>
+            <div id="studentClassMessage" class="catalog-error class-page-message" role="alert" hidden></div>
+            <div id="studentClassTable"></div>
+        </section>`;
+
+    const departmentSelect = document.getElementById('studentClassDepartment');
+    const majorSelect = document.getElementById('studentClassMajor');
+    const updateMajorFilter = () => {
+        Array.from(majorSelect.options).forEach((option, index) => {
+            if (index === 0) return;
+            option.hidden = Boolean(departmentSelect.value)
+                && normalizeIdentifier(option.dataset.departmentId) !== normalizeIdentifier(departmentSelect.value);
+        });
+        if (majorSelect.selectedOptions[0]?.hidden) majorSelect.value = '';
+        state.departmentId = departmentSelect.value;
+        state.majorId = majorSelect.value;
+        state.page = 1;
+        renderTablePage();
+    };
+    const renderTablePage = () => {
+        const filtered = getFiltered();
+        const pageCount = Math.max(1, Math.ceil(filtered.length / state.pageSize));
+        state.page = Math.min(state.page, pageCount);
+        const pageRows = filtered.slice((state.page - 1) * state.pageSize, state.page * state.pageSize);
+        document.getElementById('studentClassTable').innerHTML = pageRows.length ? `
+            <div class="table-scroll"><table class="unified-table"><thead><tr>
+                <th>Mã lớp / Tên lớp</th><th>Khoa</th><th>Ngành</th><th>Chương trình</th><th>Niên khóa</th><th>Cố vấn</th><th>Sĩ số</th><th>Trạng thái</th><th class="text-end">Thao tác</th>
+            </tr></thead><tbody>${pageRows.map((item) => {
+                const active = item.isActive !== false;
+                const count = studentCounts.get(normalizeIdentifier(item.id)) || 0;
+                return `<tr>
+                    <td><strong>${escapeHtml(item.code)}</strong><small class="table-subtext">${escapeHtml(item.name)}</small></td>
+                    <td>${escapeHtml(display(lookup.departments, item.departmentId))}</td>
+                    <td>${escapeHtml(display(lookup.majors, item.majorId))}</td>
+                    <td>${escapeHtml(display(lookup.programs, item.trainingProgramId))}</td>
+                    <td>${escapeHtml(display(lookup.academicYears, item.academicYearId))}</td>
+                    <td>${escapeHtml(display(lookup.lecturers, item.advisorId))}</td>
+                    <td>${count}</td>
+                    <td>${active ? '<span class="status-badge active">Đang hoạt động</span>' : '<span class="status-badge muted">Ngừng hoạt động</span>'}</td>
+                    <td class="table-actions"><button type="button" class="status-action" data-class-action="view" data-class-id="${escapeHtml(item.id)}">Chi tiết</button><button type="button" class="status-action" data-class-action="edit" data-class-id="${escapeHtml(item.id)}">Sửa</button><button type="button" class="status-action ${active ? 'reject' : 'approve'}" data-class-action="toggle" data-class-id="${escapeHtml(item.id)}" data-class-active="${active ? '1' : '0'}">${active ? 'Ngừng' : 'Kích hoạt'}</button></td>
+                </tr>`;
+            }).join('')}</tbody></table></div>
+            <div class="table-footer class-table-footer"><span>${filtered.length} lớp · Trang ${state.page}/${pageCount}</span><div><button type="button" class="outline-button" id="studentClassPrevious" ${state.page <= 1 ? 'disabled' : ''}>Trước</button><button type="button" class="outline-button" id="studentClassNext" ${state.page >= pageCount ? 'disabled' : ''}>Sau</button></div></div>`
+            : '<div class="empty-state"><i class="bi bi-people"></i><strong>Không có lớp phù hợp</strong></div>';
+        bindClassRowActions();
+        document.getElementById('studentClassPrevious')?.addEventListener('click', () => { state.page--; renderTablePage(); });
+        document.getElementById('studentClassNext')?.addEventListener('click', () => { state.page++; renderTablePage(); });
+    };
+    const bindClassRowActions = () => {
+        portalContent.querySelectorAll('[data-class-action]').forEach((button) => button.addEventListener('click', async () => {
+            const item = classes.find((row) => normalizeIdentifier(row.id) === normalizeIdentifier(button.dataset.classId));
+            if (!item) return;
+            if (button.dataset.classAction === 'view') {
+                try {
+                    const detail = await springRequest(`/student-classes/${encodeURIComponent(item.id)}`);
+                    openStudentClassDetails(detail, lookup, display, studentCounts.get(normalizeIdentifier(item.id)) || 0);
+                } catch (error) {
+                    showClassPageError(error.message);
+                }
+            } else if (button.dataset.classAction === 'edit') {
+                openStudentClassDialog(item, { classes, departments, majors, programs, academicYears, lecturers }, saveClass);
+            } else {
+                const active = button.dataset.classActive !== '1';
+                const action = active ? 'kích hoạt' : 'ngừng hoạt động';
+                if (!confirm(`Bạn có chắc muốn ${action} lớp ${item.code}?`)) return;
+                try {
+                    await springRequest(`/student-classes/${encodeURIComponent(item.id)}/status`, {
+                        method: 'PATCH',
+                        body: JSON.stringify({ isActive: active })
+                    });
+                    await renderStudentClasses();
+                } catch (error) {
+                    showClassPageError(error.message);
+                }
+            }
+        }));
+    };
+    const saveClass = async (item, payload) => {
+        await springRequest(`/student-classes${item ? `/${encodeURIComponent(item.id)}` : ''}`, {
+            method: item ? 'PUT' : 'POST',
+            body: JSON.stringify(payload)
+        });
+        await renderStudentClasses();
+    };
+
+    document.getElementById('studentClassSearch').addEventListener('input', (event) => {
+        state.keyword = event.target.value;
+        state.page = 1;
+        renderTablePage();
+    });
+    departmentSelect.addEventListener('change', updateMajorFilter);
+    majorSelect.addEventListener('change', () => { state.majorId = majorSelect.value; state.page = 1; renderTablePage(); });
+    document.getElementById('studentClassAcademicYear').addEventListener('change', (event) => {
+        state.academicYearId = event.target.value; state.page = 1; renderTablePage();
+    });
+    document.getElementById('studentClassStatus').addEventListener('change', (event) => {
+        state.status = event.target.value; state.page = 1; renderTablePage();
+    });
+    document.getElementById('studentClassRefresh').addEventListener('click', renderStudentClasses);
+    document.getElementById('studentClassAdd').addEventListener('click', () =>
+        openStudentClassDialog(null, { classes, departments, majors, programs, academicYears, lecturers }, saveClass));
+    updateMajorFilter();
+}
+
+function openStudentClassDetails(record, lookup, display, studentCount) {
+    const details = [
+        ['Mã lớp', record.code],
+        ['Tên lớp', record.name],
+        ['Khoa', display(lookup.departments, record.departmentId)],
+        ['Ngành', display(lookup.majors, record.majorId)],
+        ['Chương trình đào tạo', display(lookup.programs, record.trainingProgramId)],
+        ['Niên khóa', display(lookup.academicYears, record.academicYearId)],
+        ['Cố vấn học tập', display(lookup.lecturers, record.advisorId)],
+        ['Sĩ số hiện tại', studentCount],
+        ['Trạng thái', record.isActive === false ? 'Ngừng hoạt động' : 'Đang hoạt động'],
+        ['Ngày tạo', record.createdAt],
+        ['Cập nhật lần cuối', record.updatedAt]
+    ];
+    const dialog = createClassDialogShell(record.code, 'CHI TIẾT LỚP SINH VIÊN', false);
+    dialog.querySelector('.dialog-fields').innerHTML = details.map(([label, value]) =>
+        `<div class="dialog-field"><label>${escapeHtml(label)}</label><div>${escapeHtml(value || '—')}</div></div>`).join('');
+    dialog.querySelector('.dialog-actions').innerHTML = '<button type="button" class="outline-button class-dialog-close">Đóng</button>';
+    dialog.querySelectorAll('.class-dialog-close').forEach((button) => button.addEventListener('click', () => dialog.close()));
+    dialog.showModal();
+}
+
+function createClassDialogShell(title, eyebrow, withForm = true) {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'unified-dialog';
+    dialog.innerHTML = `
+        <form>
+            <div class="dialog-heading"><div><small>${escapeHtml(eyebrow)}</small><h2>${escapeHtml(title || 'Lớp sinh viên')}</h2></div><button type="button" class="dialog-close class-dialog-close"><i class="bi bi-x-lg"></i></button></div>
+            <div class="dialog-fields"></div>
+            <p class="dialog-status" role="alert"></p>
+            <div class="dialog-actions"></div>
+        </form>`;
+    document.body.append(dialog);
+    dialog.addEventListener('close', () => dialog.remove());
+    dialog.querySelectorAll('.class-dialog-close').forEach((button) => button.addEventListener('click', () => dialog.close()));
+    if (withForm) dialog.querySelector('form').addEventListener('submit', (event) => event.preventDefault());
+    return dialog;
+}
+
+function openStudentClassDialog(record, options, onSave) {
+    const selected = (value, current) => normalizeIdentifier(value) === normalizeIdentifier(current);
+    const available = (item, current) => item.isActive !== false || selected(item.id, current);
+    const labels = {
+        department: (item) => [item.code, item.name, item.isActive === false ? '(Ngừng hoạt động)' : ''].filter(Boolean).join(' - '),
+        major: (item) => [item.code, item.name, item.isActive === false ? '(Ngừng hoạt động)' : ''].filter(Boolean).join(' - '),
+        program: (item) => [item.code, item.name, item.isActive === false ? '(Ngừng hoạt động)' : ''].filter(Boolean).join(' - '),
+        year: (item) => [item.code, item.name, item.year].filter(Boolean).join(' - '),
+        lecturer: (item) => [item.lecturerCode, item.fullName, item.isActive === false ? '(Ngừng hoạt động)' : ''].filter(Boolean).join(' - ')
+    };
+    const optionHtml = (items, current, label) => items.filter((item) => available(item, current))
+        .map((item) => `<option value="${escapeHtml(item.id)}"${selected(item.id, current) ? ' selected' : ''}>${escapeHtml(label(item))}</option>`)
+        .join('');
+    const dialog = createClassDialogShell(record ? `Cập nhật lớp ${record.code}` : 'Thêm lớp sinh viên', 'QUẢN LÝ LỚP SINH VIÊN');
+    const fields = dialog.querySelector('.dialog-fields');
+    fields.innerHTML = `
+        <div class="dialog-field"><label for="studentClassCode">Mã lớp</label><input id="studentClassCode" name="code" required maxlength="100" value="${escapeHtml(record?.code || '')}" placeholder="Ví dụ: IT24A" /></div>
+        <div class="dialog-field"><label for="studentClassName">Tên lớp</label><input id="studentClassName" name="name" required maxlength="255" value="${escapeHtml(record?.name || '')}" placeholder="Ví dụ: Công nghệ thông tin 24A" /></div>
+        <div class="dialog-field"><label for="studentClassFormDepartment">Khoa</label><select id="studentClassFormDepartment" name="departmentId" required><option value="">-- Chọn khoa --</option>${optionHtml(options.departments, record?.departmentId, labels.department)}</select></div>
+        <div class="dialog-field"><label for="studentClassFormMajor">Ngành</label><select id="studentClassFormMajor" name="majorId" required><option value="">-- Chọn ngành --</option></select></div>
+        <div class="dialog-field"><label for="studentClassFormProgram">Chương trình đào tạo</label><select id="studentClassFormProgram" name="trainingProgramId" required><option value="">-- Chọn chương trình --</option></select></div>
+        <div class="dialog-field"><label for="studentClassFormYear">Niên khóa</label><select id="studentClassFormYear" name="academicYearId" required><option value="">-- Chọn niên khóa --</option>${optionHtml(options.academicYears, record?.academicYearId, labels.year)}</select></div>
+        <div class="dialog-field"><label for="studentClassFormAdvisor">Cố vấn học tập (không bắt buộc)</label><select id="studentClassFormAdvisor" name="advisorId"><option value="">-- Chưa phân công --</option>${optionHtml(options.lecturers, record?.advisorId, labels.lecturer)}</select></div>
+        <label class="catalog-checkbox"><input type="checkbox" name="isActive" ${record?.isActive === false ? '' : 'checked'} /> Đang hoạt động</label>`;
+    const status = dialog.querySelector('.dialog-status');
+    const departmentSelect = fields.querySelector('[name="departmentId"]');
+    const majorSelect = fields.querySelector('[name="majorId"]');
+    const programSelect = fields.querySelector('[name="trainingProgramId"]');
+    const refreshMajors = (selectedMajor = '') => {
+        const departmentId = departmentSelect.value;
+        const rows = options.majors.filter((item) => normalizeIdentifier(item.departmentId) === normalizeIdentifier(departmentId));
+        majorSelect.innerHTML = `<option value="">-- Chọn ngành --</option>${optionHtml(rows, selectedMajor || record?.majorId, labels.major)}`;
+        if (!Array.from(majorSelect.options).some((item) => selected(item.value, selectedMajor || record?.majorId))) majorSelect.value = '';
+        refreshPrograms(selectedMajor || majorSelect.value, record?.trainingProgramId);
+    };
+    const refreshPrograms = (majorId = '', selectedProgram = '') => {
+        const departmentId = departmentSelect.value;
+        const rows = options.programs.filter((item) =>
+            normalizeIdentifier(item.departmentId) === normalizeIdentifier(departmentId)
+            && normalizeIdentifier(item.majorId) === normalizeIdentifier(majorId));
+        programSelect.innerHTML = `<option value="">-- Chọn chương trình --</option>${optionHtml(rows, selectedProgram, labels.program)}`;
+    };
+    departmentSelect.addEventListener('change', () => refreshMajors());
+    majorSelect.addEventListener('change', () => refreshPrograms(majorSelect.value));
+    refreshMajors(record?.majorId || '');
+    dialog.querySelector('.dialog-actions').innerHTML = '<button type="button" class="outline-button class-dialog-close">Hủy</button><button type="submit" class="primary-button">Lưu lớp</button>';
+    dialog.querySelectorAll('.class-dialog-close').forEach((button) => button.addEventListener('click', () => dialog.close()));
+    dialog.querySelector('form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const formData = new FormData(event.currentTarget);
+        const payload = {
+            code: String(formData.get('code') || '').trim(),
+            name: String(formData.get('name') || '').trim(),
+            departmentId: formData.get('departmentId'),
+            majorId: formData.get('majorId'),
+            trainingProgramId: formData.get('trainingProgramId'),
+            academicYearId: formData.get('academicYearId'),
+            advisorId: formData.get('advisorId') || null,
+            isActive: formData.has('isActive')
+        };
+        const major = options.majors.find((item) => selected(item.id, payload.majorId));
+        const program = options.programs.find((item) => selected(item.id, payload.trainingProgramId));
+        if (!major || !program
+                || !selected(major.departmentId, payload.departmentId)
+                || !selected(program.departmentId, payload.departmentId)
+                || !selected(program.majorId, payload.majorId)) {
+            status.textContent = 'Khoa, ngành và chương trình đào tạo phải thuộc đúng quan hệ.';
+            return;
+        }
+        try {
+            await onSave(record, payload);
+            dialog.close();
+        } catch (error) {
+            status.textContent = error.message;
+        }
+    });
+    dialog.showModal();
+}
+
+function showClassPageError(message) {
+    const status = document.getElementById('studentClassMessage');
+    if (status) {
+        status.textContent = message;
+        status.hidden = false;
+    }
 }
 
 async function renderSimpleResource(endpoint, kind) {
@@ -402,15 +756,29 @@ async function renderSimpleResource(endpoint, kind) {
             departmentId: { rows: departments, codeKey: 'code', nameKey: 'name' }
         };
     } else if (kind === 'course-section') {
-        const [courses, semesters, rooms] = await Promise.all([
+        const [courses, semesters, gradingScales] = await Promise.all([
             springRequest('/courses').catch(() => []),
             springRequest('/semesters').catch(() => []),
-            springRequest('/academic-form-options/rooms').catch(() => [])
+            springRequest('/academic-form-options/grading-scales').catch(() => [])
         ]);
         lookupDefinitions = {
             courseId: { rows: courses, codeKey: 'code', nameKey: 'name' },
             semesterId: { rows: semesters, codeKey: 'code', nameKey: 'name' },
-            roomId: { rows: rooms, codeKey: 'code', nameKey: 'name' }
+            gradingScaleId: { rows: gradingScales, codeKey: 'code', nameKey: 'name' }
+        };
+        formSelects = {
+            courseId: {
+                rows: courses,
+                label: (item) => [item.code, item.name].filter(Boolean).join(' - ')
+            },
+            semesterId: {
+                rows: semesters,
+                label: (item) => [item.code, item.name].filter(Boolean).join(' - ')
+            },
+            gradingScaleId: {
+                rows: gradingScales,
+                label: (item) => [item.code, item.name, item.status].filter(Boolean).join(' - ')
+            }
         };
     }
     const config = {
@@ -439,8 +807,12 @@ async function renderSimpleResource(endpoint, kind) {
         },
         'course-section': {
             title: 'Quản lý lớp học phần',
-            description: 'Giảng viên, sĩ số, phòng học, lịch học và trạng thái lớp.',
-            fields: [['code', 'Mã lớp'], ['name', 'Tên lớp'], ['courseId', 'Học phần'], ['semesterId', 'Học kỳ'], ['roomId', 'Phòng học'], ['maxStudents', 'Sĩ số tối đa'], ['status', 'Trạng thái']],
+            description: 'Học phần, học kỳ, thang điểm, sĩ số và trạng thái lớp.',
+            fields: [['code', 'Mã lớp'], ['name', 'Tên lớp'], ['courseId', 'Học phần'], ['semesterId', 'Học kỳ'], ['gradingScaleId', 'Thang điểm'], ['maxStudents', 'Sĩ số tối đa'], ['status', 'Trạng thái']],
+            requiredFields: ['code', 'name', 'courseId', 'semesterId', 'gradingScaleId'],
+            formNotice: lookupDefinitions.gradingScaleId.rows.length
+                ? ''
+                : 'Chưa có thang điểm trong cơ sở dữ liệu. Cần tạo thang điểm trước khi thêm lớp học phần.',
             addLabel: 'Thêm lớp học phần'
         }
     }[kind];
@@ -466,6 +838,399 @@ async function renderSchoolYearPage() {
         { id: 'semesters', title: 'Học kỳ', rows: semesters, fields: [['code', 'Mã học kỳ'], ['name', 'Tên học kỳ'], ['schoolYearId', 'Năm học'], ['startDate', 'Ngày bắt đầu'], ['endDate', 'Ngày kết thúc'], ['isActive', 'Trạng thái']], lookupDefinitions: semesterLookup }
     ];
     renderTabbedResource('Năm học & học kỳ', 'Thiết lập năm học và học kỳ.', tabs);
+}
+
+const academicCatalogDefinitions = {
+    departments: {
+        title: 'Khoa',
+        endpoint: '/departments',
+        columns: [['code', 'Mã khoa'], ['name', 'Tên khoa'], ['establishedYear', 'Năm thành lập'], ['isActive', 'Trạng thái']],
+        fields: [
+            { name: 'code', label: 'Mã khoa', required: true, maxLength: 100 },
+            { name: 'name', label: 'Tên khoa', required: true, maxLength: 255 },
+            { name: 'establishedYear', label: 'Năm thành lập', type: 'number', min: 1, max: 32767, step: 1 },
+            { name: 'description', label: 'Mô tả', type: 'textarea', maxLength: 500 },
+            { name: 'isActive', label: 'Đang hoạt động', type: 'checkbox' }
+        ]
+    },
+    majors: {
+        title: 'Ngành',
+        endpoint: '/majors',
+        filters: [{ name: 'departmentId', label: 'Tất cả khoa', lookup: 'departments' }],
+        columns: [['code', 'Mã ngành'], ['name', 'Tên ngành'], ['departmentId', 'Khoa'], ['effectiveDate', 'Ngày hiệu lực'], ['expiryDate', 'Ngày hết hiệu lực'], ['isActive', 'Trạng thái']],
+        fields: [
+            { name: 'departmentId', label: 'Khoa', type: 'lookup', lookup: 'departments', required: true },
+            { name: 'code', label: 'Mã ngành', required: true, maxLength: 50 },
+            { name: 'name', label: 'Tên ngành', required: true, maxLength: 255 },
+            { name: 'effectiveDate', label: 'Ngày hiệu lực', type: 'date' },
+            { name: 'expiryDate', label: 'Ngày hết hiệu lực', type: 'date' },
+            { name: 'description', label: 'Mô tả', type: 'textarea', maxLength: 500 },
+            { name: 'isActive', label: 'Đang hoạt động', type: 'checkbox' }
+        ]
+    },
+    'training-programs': {
+        title: 'Chương trình đào tạo',
+        endpoint: '/training-programs',
+        filters: [
+            { name: 'departmentId', label: 'Tất cả khoa', lookup: 'departments' },
+            { name: 'majorId', label: 'Tất cả ngành', lookup: 'majors', dependsOn: 'departmentId' }
+        ],
+        columns: [['code', 'Mã chương trình'], ['name', 'Tên chương trình'], ['departmentId', 'Khoa'], ['majorId', 'Ngành'], ['admissionYear', 'Năm tuyển sinh'], ['isActive', 'Trạng thái']],
+        fields: [
+            { name: 'departmentId', label: 'Khoa', type: 'lookup', lookup: 'departments', required: true },
+            { name: 'majorId', label: 'Ngành', type: 'lookup', lookup: 'majors', dependsOn: 'departmentId', required: true },
+            { name: 'code', label: 'Mã chương trình', required: true, maxLength: 50 },
+            { name: 'name', label: 'Tên chương trình', required: true, maxLength: 255 },
+            { name: 'admissionYear', label: 'Năm tuyển sinh', type: 'number', min: 1, max: 32767, step: 1 },
+            { name: 'durationYears', label: 'Thời gian đào tạo (năm)', type: 'number', min: 0.1, max: 999.9, step: 0.1 },
+            { name: 'totalCredits', label: 'Tổng số tín chỉ', type: 'number', min: 0, max: 9999.99, step: 0.01 },
+            { name: 'effectiveDate', label: 'Ngày hiệu lực', type: 'date' },
+            { name: 'expiryDate', label: 'Ngày hết hiệu lực', type: 'date' },
+            { name: 'status', label: 'Trạng thái', maxLength: 30 },
+            { name: 'description', label: 'Mô tả', type: 'textarea', maxLength: 500 },
+            { name: 'isActive', label: 'Đang hoạt động', type: 'checkbox' }
+        ]
+    },
+    'academic-years': {
+        title: 'Niên khóa',
+        endpoint: '/academic-years',
+        columns: [['code', 'Mã niên khóa'], ['name', 'Tên niên khóa'], ['year', 'Niên khóa'], ['startDate', 'Ngày bắt đầu'], ['endDate', 'Ngày kết thúc'], ['isActive', 'Trạng thái']],
+        fields: [
+            { name: 'code', label: 'Mã niên khóa', required: true, maxLength: 100 },
+            { name: 'name', label: 'Tên niên khóa', required: true, maxLength: 100 },
+            { name: 'year', label: 'Khoảng niên khóa', placeholder: 'Ví dụ: 2024-2028', maxLength: 20 },
+            { name: 'description', label: 'Mô tả', type: 'textarea', maxLength: 255 },
+            { name: 'startDate', label: 'Ngày bắt đầu', type: 'date' },
+            { name: 'endDate', label: 'Ngày kết thúc', type: 'date' },
+            { name: 'isActive', label: 'Đang hoạt động', type: 'checkbox' }
+        ]
+    },
+    'school-years': {
+        title: 'Năm học',
+        endpoint: '/school-years',
+        columns: [['code', 'Mã năm học'], ['name', 'Tên năm học'], ['startDate', 'Ngày bắt đầu'], ['endDate', 'Ngày kết thúc'], ['isActive', 'Trạng thái']],
+        fields: [
+            { name: 'code', label: 'Mã năm học', required: true, maxLength: 100 },
+            { name: 'name', label: 'Tên năm học', required: true, maxLength: 255 },
+            { name: 'description', label: 'Mô tả', type: 'textarea', maxLength: 255 },
+            { name: 'note', label: 'Ghi chú', type: 'textarea', maxLength: 255 },
+            { name: 'startDate', label: 'Ngày bắt đầu', type: 'date' },
+            { name: 'endDate', label: 'Ngày kết thúc', type: 'date' },
+            { name: 'isActive', label: 'Đang hoạt động', type: 'checkbox' }
+        ]
+    },
+    semesters: {
+        title: 'Học kỳ',
+        endpoint: '/semesters',
+        filters: [{ name: 'schoolYearId', label: 'Tất cả năm học', lookup: 'school-years' }],
+        columns: [['code', 'Mã học kỳ'], ['name', 'Tên học kỳ'], ['schoolYearId', 'Năm học'], ['startDate', 'Ngày bắt đầu'], ['endDate', 'Ngày kết thúc'], ['isActive', 'Trạng thái']],
+        fields: [
+            { name: 'schoolYearId', label: 'Năm học', type: 'lookup', lookup: 'school-years', required: true },
+            { name: 'code', label: 'Mã học kỳ', required: true, maxLength: 100 },
+            { name: 'name', label: 'Tên học kỳ', required: true, maxLength: 255 },
+            { name: 'startDate', label: 'Ngày bắt đầu', type: 'date' },
+            { name: 'endDate', label: 'Ngày kết thúc', type: 'date' },
+            { name: 'isActive', label: 'Đang hoạt động', type: 'checkbox' }
+        ]
+    }
+};
+
+async function renderAcademicCatalogs(activeKey = 'departments') {
+    portalContent.innerHTML = '<section class="panel-card"><div class="empty-state"><strong>Đang tải danh mục đào tạo...</strong></div></section>';
+    const entries = Object.entries(academicCatalogDefinitions);
+    let data;
+    try {
+        const values = await Promise.all(entries.map(([, definition]) => springRequest(definition.endpoint)));
+        data = Object.fromEntries(entries.map(([key], index) => [key, values[index]]));
+    } catch (error) {
+        portalContent.innerHTML = `
+            <section class="page-heading"><div><h2>Danh mục đào tạo</h2><p>Không tải được dữ liệu từ Spring Boot.</p></div></section>
+            <div class="catalog-error" role="alert">${escapeHtml(catalogErrorMessage(error))}</div>
+            <button type="button" class="outline-button" id="catalogRetry"><i class="bi bi-arrow-clockwise"></i>Thử lại</button>`;
+        document.getElementById('catalogRetry').addEventListener('click', () => renderAcademicCatalogs(activeKey));
+        return;
+    }
+    renderAcademicCatalogPage(data, activeKey);
+}
+
+function catalogErrorMessage(error) {
+    const descriptions = {
+        400: 'Dữ liệu gửi lên không hợp lệ',
+        401: 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn. Hãy đăng nhập lại',
+        403: 'Tài khoản hiện tại không có quyền quản lý danh mục',
+        409: 'Dữ liệu bị trùng hoặc xung đột với dữ liệu hiện có',
+        500: 'Máy chủ gặp lỗi khi xử lý yêu cầu'
+    };
+    const description = descriptions[error.status];
+    return description
+        ? `${description} (HTTP ${error.status}): ${error.message}`
+        : error.message || 'Không thể kết nối máy chủ.';
+}
+
+function renderAcademicCatalogPage(data, activeKey) {
+    const definition = academicCatalogDefinitions[activeKey];
+    const tabs = Object.entries(academicCatalogDefinitions).map(([key, item]) =>
+        `<button type="button" class="resource-tab${key === activeKey ? ' active' : ''}" data-catalog-tab="${key}">${escapeHtml(item.title)}</button>`
+    ).join('');
+    const filters = (definition.filters || []).map((filter) => `
+        <select class="catalog-filter" aria-label="${escapeHtml(filter.label)}" data-catalog-filter="${filter.name}">
+            ${renderCatalogFilterOptions(filter, data, '')}
+        </select>`).join('');
+    portalContent.innerHTML = `
+        <section class="page-heading"><div><h2>Danh mục đào tạo</h2><p>Quản lý các danh mục và quan hệ dữ liệu dùng chung trong hệ thống.</p></div>
+            <button type="button" class="primary-button" id="catalogAdd"><i class="bi bi-plus-lg"></i>Thêm ${escapeHtml(definition.title.toLocaleLowerCase('vi'))}</button></section>
+        <section class="panel-card resource-card">
+            <div class="resource-toolbar catalog-tabs">${tabs}</div>
+            <div class="resource-toolbar catalog-toolbar">
+                <div class="search-box"><i class="bi bi-search"></i><input id="catalogSearch" type="search" placeholder="Tìm kiếm ${escapeHtml(definition.title.toLocaleLowerCase('vi'))}..." /></div>
+                <select class="catalog-filter" aria-label="Lọc trạng thái" data-catalog-filter="isActive">
+                    <option value="">Mọi trạng thái</option><option value="true">Đang hoạt động</option><option value="false">Ngừng hoạt động</option>
+                </select>
+                ${filters}
+                <button type="button" class="outline-button" id="catalogRefresh"><i class="bi bi-arrow-clockwise"></i>Làm mới</button>
+            </div>
+            <div id="catalogPageStatus" class="catalog-error" role="alert" hidden></div>
+            <div id="catalogTable"></div>
+        </section>
+        <dialog id="catalogDialog" class="unified-dialog"></dialog>`;
+
+    const drawTable = () => {
+        const search = document.getElementById('catalogSearch').value.trim().toLocaleLowerCase('vi');
+        const activeFilter = portalContent.querySelector('[data-catalog-filter="isActive"]').value;
+        const relatedFilters = [...portalContent.querySelectorAll('[data-catalog-filter]')]
+            .filter((select) => select.dataset.catalogFilter !== 'isActive')
+            .map((select) => [select.dataset.catalogFilter, select.value]);
+        const rows = (data[activeKey] || []).filter((row) => {
+            if (activeFilter !== '' && String(Boolean(row.isActive)) !== activeFilter) return false;
+            if (relatedFilters.some(([key, value]) => value && normalizeIdentifier(row[key]) !== normalizeIdentifier(value))) return false;
+            return !search || catalogSearchText(activeKey, row, data).includes(search);
+        });
+        document.getElementById('catalogTable').innerHTML = renderCatalogTable(activeKey, rows, data);
+        bindCatalogActions(activeKey, data);
+    };
+
+    portalContent.querySelectorAll('[data-catalog-tab]').forEach((button) =>
+        button.addEventListener('click', () => renderAcademicCatalogPage(data, button.dataset.catalogTab)));
+    portalContent.querySelectorAll('[data-catalog-filter]').forEach((select) => {
+        select.addEventListener('change', () => {
+            if (select.dataset.catalogFilter === 'departmentId') {
+                const majorFilter = portalContent.querySelector('[data-catalog-filter="majorId"]');
+                if (majorFilter) {
+                    majorFilter.innerHTML = renderCatalogFilterOptions(
+                        academicCatalogDefinitions[activeKey].filters.find((filter) => filter.name === 'majorId'),
+                        data, select.value);
+                }
+            }
+            drawTable();
+        });
+    });
+    document.getElementById('catalogSearch').addEventListener('input', drawTable);
+    document.getElementById('catalogRefresh').addEventListener('click', () => renderAcademicCatalogs(activeKey));
+    document.getElementById('catalogAdd').addEventListener('click', () => openCatalogForm(activeKey, null, data));
+    drawTable();
+}
+
+function renderCatalogFilterOptions(filter, data, parentValue) {
+    const options = (data[filter.lookup] || []).filter((item) =>
+        (!parentValue || filter.name !== 'majorId'
+            || normalizeIdentifier(item.departmentId) === normalizeIdentifier(parentValue))
+        && Boolean(item.isActive)
+    );
+    return `<option value="">${escapeHtml(filter.label)}</option>${options.map((item) =>
+        `<option value="${escapeHtml(item.id)}">${escapeHtml(catalogReferenceLabel(item))}</option>`
+    ).join('')}`;
+}
+
+function catalogSearchText(key, row, data) {
+    const values = Object.values(row).filter((value) => value != null).map(String);
+    for (const [field, lookup] of Object.entries({ departmentId: 'departments', majorId: 'majors', schoolYearId: 'school-years' })) {
+        if (row[field]) {
+            const related = (data[lookup] || []).find((item) => normalizeIdentifier(item.id) === normalizeIdentifier(row[field]));
+            if (related) values.push(catalogReferenceLabel(related));
+        }
+    }
+    return values.join(' ').toLocaleLowerCase('vi');
+}
+
+function catalogReferenceLabel(item) {
+    return [item.code, item.name].filter(Boolean).join(' - ') || item.fullName || 'Không có tên';
+}
+
+function catalogDisplayValue(key, value, data) {
+    if (value == null || value === '') return '<span class="muted-value">Chưa cập nhật</span>';
+    if (key === 'isActive') {
+        return value
+            ? '<span class="status-badge active">Đang hoạt động</span>'
+            : '<span class="status-badge muted">Ngừng hoạt động</span>';
+    }
+    const relatedResources = { departmentId: 'departments', majorId: 'majors', schoolYearId: 'school-years' };
+    const lookup = relatedResources[key];
+    if (lookup) {
+        const related = (data[lookup] || []).find((item) => normalizeIdentifier(item.id) === normalizeIdentifier(value));
+        return escapeHtml(related ? catalogReferenceLabel(related) : 'Danh mục liên quan không còn hoạt động');
+    }
+    if (key === 'startDate' || key === 'endDate' || key === 'effectiveDate' || key === 'expiryDate') {
+        return escapeHtml(String(value).slice(0, 10));
+    }
+    return escapeHtml(String(value));
+}
+
+function renderCatalogTable(key, rows, data) {
+    const definition = academicCatalogDefinitions[key];
+    if (!rows.length) {
+        return `<div class="empty-state"><i class="bi bi-inbox"></i><strong>Không có bản ghi phù hợp</strong><span>Thử thay đổi từ khóa hoặc bộ lọc.</span></div>`;
+    }
+    const body = rows.map((row) => `
+        <tr>${definition.columns.map(([field]) =>
+            `<td>${catalogDisplayValue(field, row[field], data)}</td>`
+        ).join('')}
+            <td class="table-actions">
+                <button type="button" class="icon-button" title="Xem chi tiết" aria-label="Xem chi tiết" data-catalog-action="detail" data-id="${escapeHtml(row.id)}"><i class="bi bi-eye"></i></button>
+                <button type="button" class="icon-button edit" title="Sửa" aria-label="Sửa" data-catalog-action="edit" data-id="${escapeHtml(row.id)}"><i class="bi bi-pencil-square"></i></button>
+                <button type="button" class="icon-button delete" title="Xóa mềm" aria-label="Xóa mềm" data-catalog-action="delete" data-id="${escapeHtml(row.id)}"><i class="bi bi-trash"></i></button>
+            </td>
+        </tr>`).join('');
+    return `<div class="table-scroll"><table class="unified-table"><thead><tr>${definition.columns.map(([, label]) =>
+        `<th>${escapeHtml(label)}</th>`
+    ).join('')}<th class="text-end">Thao tác</th></tr></thead><tbody>${body}</tbody></table></div>
+        <div class="table-footer"><span>${rows.length} bản ghi</span></div>`;
+}
+
+function bindCatalogActions(key, data) {
+    document.querySelectorAll('[data-catalog-action]').forEach((button) => {
+        button.addEventListener('click', async () => {
+            const action = button.dataset.catalogAction;
+            const definition = academicCatalogDefinitions[key];
+            try {
+                if (action === 'delete') {
+                    if (!confirm('Xóa mềm bản ghi này? Dữ liệu vẫn được giữ trong cơ sở dữ liệu.')) return;
+                    await springRequest(`${definition.endpoint}/${encodeURIComponent(button.dataset.id)}`, { method: 'DELETE' });
+                    await renderAcademicCatalogs(key);
+                    return;
+                }
+                const record = await springRequest(`${definition.endpoint}/${encodeURIComponent(button.dataset.id)}`);
+                if (action === 'edit') openCatalogForm(key, record, data);
+                else showCatalogDetails(key, record, data);
+            } catch (error) {
+                const status = document.getElementById('catalogPageStatus');
+                status.textContent = catalogErrorMessage(error);
+                status.hidden = false;
+            }
+        });
+    });
+}
+
+function showCatalogDetails(key, record, data) {
+    const definition = academicCatalogDefinitions[key];
+    const dialog = document.getElementById('catalogDialog');
+    const details = definition.fields.map((field) => `
+        <div><dt>${escapeHtml(field.label)}</dt><dd>${catalogDisplayValue(field.name, record[field.name], data)}</dd></div>`
+    ).join('');
+    dialog.innerHTML = `
+        <div class="dialog-heading"><div><small>CHI TIẾT DANH MỤC</small><h2>${escapeHtml(definition.title)}</h2></div>
+            <button type="button" class="dialog-close" data-catalog-close aria-label="Đóng"><i class="bi bi-x-lg"></i></button></div>
+        <dl class="catalog-details">${details}</dl>
+        <div class="dialog-actions"><button type="button" class="outline-button" data-catalog-close>Đóng</button></div>`;
+    dialog.querySelectorAll('[data-catalog-close]').forEach((button) => button.addEventListener('click', () => dialog.close()));
+    dialog.showModal();
+}
+
+function openCatalogForm(key, record, data) {
+    const definition = academicCatalogDefinitions[key];
+    const dialog = document.getElementById('catalogDialog');
+    const inputs = definition.fields.map((field) => renderCatalogField(field, record, data)).join('');
+    dialog.innerHTML = `
+        <form id="catalogForm">
+            <div class="dialog-heading"><div><small>QUẢN LÝ ĐÀO TẠO</small><h2>${record ? 'Cập nhật' : 'Thêm'} ${escapeHtml(definition.title.toLocaleLowerCase('vi'))}</h2></div>
+                <button type="button" class="dialog-close" data-catalog-close aria-label="Đóng"><i class="bi bi-x-lg"></i></button></div>
+            <p id="catalogFormStatus" class="dialog-status" role="alert"></p>
+            <div class="dialog-fields">${inputs}</div>
+            <div class="dialog-actions"><button type="button" class="outline-button" data-catalog-close>Hủy</button><button type="submit" class="primary-button">Lưu dữ liệu</button></div>
+        </form>`;
+    dialog.querySelectorAll('[data-catalog-close]').forEach((button) => button.addEventListener('click', () => dialog.close()));
+    const form = dialog.querySelector('#catalogForm');
+    const majorSelect = form.elements.namedItem('majorId');
+    const departmentSelect = form.elements.namedItem('departmentId');
+    if (majorSelect && departmentSelect) {
+        departmentSelect.addEventListener('change', () => {
+            const currentMajorId = majorSelect.value;
+            populateCatalogMajorOptions(majorSelect, data, departmentSelect.value, currentMajorId);
+        });
+    }
+    dialog.showModal();
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const status = dialog.querySelector('#catalogFormStatus');
+        const submit = form.querySelector('[type="submit"]');
+        const payload = {};
+        for (const field of definition.fields) {
+            const input = form.elements.namedItem(field.name);
+            if (field.type === 'checkbox') payload[field.name] = input.checked;
+            else if (!input.value.trim()) payload[field.name] = null;
+            else payload[field.name] = field.type === 'number' ? Number(input.value) : input.value.trim();
+        }
+        submit.disabled = true;
+        try {
+            await springRequest(`${definition.endpoint}${record ? `/${encodeURIComponent(record.id)}` : ''}`, {
+                method: record ? 'PUT' : 'POST',
+                body: JSON.stringify(payload)
+            });
+            dialog.close();
+            await renderAcademicCatalogs(key);
+        } catch (error) {
+            status.textContent = catalogErrorMessage(error);
+        } finally {
+            submit.disabled = false;
+        }
+    });
+}
+
+function renderCatalogField(field, record, data) {
+    const value = record?.[field.name];
+    const required = field.required ? ' required' : '';
+    const maxLength = field.maxLength ? ` maxlength="${field.maxLength}"` : '';
+    if (field.type === 'checkbox') {
+        return `<label class="catalog-checkbox"><input type="checkbox" name="${field.name}"${value == null ? ' checked' : value ? ' checked' : ''}><span>${escapeHtml(field.label)}</span></label>`;
+    }
+    if (field.type === 'lookup') {
+        const selectOptions = catalogLookupItems(field, record, data);
+        const options = selectOptions.map((item) =>
+            `<option value="${escapeHtml(item.id)}"${normalizeIdentifier(item.id) === normalizeIdentifier(value) ? ' selected' : ''}>${escapeHtml(catalogReferenceLabel(item))}</option>`
+        ).join('');
+        return `<div class="dialog-field"><label>${escapeHtml(field.label)}</label><select name="${field.name}"${required}><option value="">-- Chọn ${escapeHtml(field.label.toLocaleLowerCase('vi'))} --</option>${options}</select></div>`;
+    }
+    const type = field.type || 'text';
+    const safeValue = value == null ? '' : type === 'date' ? String(value).slice(0, 10) : String(value);
+    const limits = ['min', 'max', 'step'].filter((key) => field[key] != null)
+        .map((key) => `${key}="${field[key]}"`).join(' ');
+    if (type === 'textarea') {
+        return `<div class="dialog-field"><label>${escapeHtml(field.label)}</label><textarea name="${field.name}" rows="3"${maxLength}>${escapeHtml(safeValue)}</textarea></div>`;
+    }
+    return `<div class="dialog-field"><label>${escapeHtml(field.label)}</label><input name="${field.name}" type="${type}" value="${escapeHtml(safeValue)}"${required}${maxLength}${limits ? ` ${limits}` : ''} placeholder="${escapeHtml(field.placeholder || '')}"></div>`;
+}
+
+function catalogLookupItems(field, record, data) {
+    const parentValue = field.dependsOn
+        ? document.querySelector(`#catalogForm [name="${field.dependsOn}"]`)?.value || record?.[field.dependsOn]
+        : '';
+    return (data[field.lookup] || []).filter((item) => {
+        const active = Boolean(item.isActive) || normalizeIdentifier(item.id) === normalizeIdentifier(record?.[field.name]);
+        const parentMatches = !field.dependsOn || (parentValue
+            && normalizeIdentifier(item.departmentId) === normalizeIdentifier(parentValue));
+        return active && parentMatches;
+    });
+}
+
+function populateCatalogMajorOptions(select, data, departmentId, selectedMajorId) {
+    const majors = (data.majors || []).filter((item) =>
+        Boolean(item.isActive)
+        && normalizeIdentifier(item.departmentId) === normalizeIdentifier(departmentId));
+    select.innerHTML = '<option value="">-- Chọn ngành --</option>' + majors.map((item) =>
+        `<option value="${escapeHtml(item.id)}">${escapeHtml(catalogReferenceLabel(item))}</option>`
+    ).join('');
+    if (majors.some((item) => normalizeIdentifier(item.id) === normalizeIdentifier(selectedMajorId))) {
+        select.value = selectedMajorId;
+    }
 }
 
 function renderTabbedResource(title, description, tabs) {
@@ -552,13 +1317,14 @@ function renderValue(key, value, lookupDefinitions = null) {
             cancelled: 'Đã hủy',
             REGISTERED: 'Chờ duyệt',
             CONFIRMED: 'Đã duyệt',
+            REJECTED: 'Đã từ chối',
             STUDYING: 'Đang học',
             COMPLETED: 'Hoàn thành',
             DROPPED: 'Đã rút'
         };
         const label = statusLabels[String(value)] || statusLabels[String(value).toUpperCase()] || String(value);
         const kind = ['open', 'CONFIRMED', 'COMPLETED'].includes(String(value)) ? 'active'
-            : ['closed', 'canceled', 'cancelled', 'CANCELLED', 'DROPPED'].includes(String(value)) ? 'muted'
+            : ['closed', 'canceled', 'cancelled', 'CANCELLED', 'DROPPED', 'REJECTED'].includes(String(value)) ? 'muted'
             : 'waiting';
         return `<span class="status-badge ${kind}">${escapeHtml(label)}</span>`;
     }
@@ -610,7 +1376,8 @@ function openResourceDialog(config, record = null) {
             const select = config.formSelects?.[key];
             if (select) {
                 const selectedValue = record?.[key] == null ? '' : String(record[key]);
-                const options = (select.rows || []).map((item) => {
+                const options = (select.rows || []).filter((item) =>
+                    !select.visibleWhen || select.visibleWhen(item, record)).map((item) => {
                     const value = String(item.id);
                     const selected = normalizeIdentifier(value) === normalizeIdentifier(selectedValue) ? ' selected' : '';
                     return `<option value="${escapeHtml(value)}"${selected}>${escapeHtml(select.label(item))}</option>`;
@@ -676,7 +1443,7 @@ async function loadRegistrationTable() {
                 <td><strong>${escapeHtml(row.sectionCode || '')}</strong><small class="table-subtext">${escapeHtml(row.courseName || row.sectionName || '')}</small></td>
                 <td>${renderValue('registrationDate', row.registrationDate)}</td>
                 <td>${statusBadge(row.status)}</td>
-                <td class="table-actions"><button type="button" class="status-action approve" data-status-id="${escapeHtml(row.id)}" data-status="CONFIRMED"><i class="bi bi-check2"></i>Duyệt</button><button type="button" class="status-action reject" data-status-id="${escapeHtml(row.id)}" data-status="CANCELLED"><i class="bi bi-x"></i>Từ chối</button></td>
+                <td class="table-actions"><button type="button" class="status-action approve" data-status-id="${escapeHtml(row.id)}" data-status="CONFIRMED"><i class="bi bi-check2"></i>Duyệt</button><button type="button" class="status-action reject" data-status-id="${escapeHtml(row.id)}" data-status="REJECTED"><i class="bi bi-x"></i>Từ chối</button></td>
             </tr>`).join('')}
             </tbody></table></div>${filtered.length ? `<div class="table-footer"><span>${filtered.length} đăng ký</span></div>` : '<div class="empty-state"><i class="bi bi-inbox"></i><strong>Chưa có đăng ký</strong></div>'}`;
         document.querySelectorAll('[data-status-id]').forEach((button) =>
@@ -696,6 +1463,7 @@ function statusBadge(status) {
     const label = {
         REGISTERED: 'Chờ duyệt',
         CONFIRMED: 'Đã duyệt',
+        REJECTED: 'Đã từ chối',
         STUDYING: 'Đang học',
         COMPLETED: 'Hoàn thành',
         CANCELLED: 'Đã hủy',
@@ -703,7 +1471,7 @@ function statusBadge(status) {
     }[String(status)] || status || 'Chờ duyệt';
     const kind = String(status).toUpperCase() === 'CONFIRMED' || String(status).toUpperCase() === 'COMPLETED'
         ? 'active'
-        : String(status).toUpperCase() === 'CANCELLED' || String(status).toUpperCase() === 'DROPPED'
+        : ['CANCELLED', 'DROPPED', 'REJECTED'].includes(String(status).toUpperCase())
             ? 'muted'
             : 'waiting';
     return `<span class="status-badge ${kind}">${escapeHtml(label)}</span>`;
@@ -881,6 +1649,7 @@ async function openCreateAccountDialog() {
                 <div class="dialog-field"><label>Role</label><select name="roleCode" required>${roles.map((role) => `<option value="${escapeHtml(role)}">${escapeHtml(translateRoles([role]))}</option>`).join('')}</select></div>
                 <div class="dialog-field"><label>Tên đăng nhập</label><input name="username" required minlength="3" maxlength="100" /></div>
                 <div class="dialog-field"><label>Họ và tên hiển thị</label><input name="displayName" required maxlength="255" /></div>
+                <div class="dialog-field"><label>Email</label><input name="email" type="email" maxlength="254" /></div>
                 <div class="dialog-field"><label>Mật khẩu</label><input name="password" type="password" required minlength="12" maxlength="72" /></div>
             </div>
             <p id="createManagedStatus" class="dialog-status">${roles.length ? '' : 'Không có role độc lập đang hoạt động.'}</p>
@@ -1006,5 +1775,16 @@ function translateRoles(roles) {
 function normalizeIdentifier(value) {
     return value == null ? '' : String(value).trim().toLowerCase();
 }
+
+window.addEventListener('pageshow', () => {
+    if (!localStorage.getItem('nestAccessToken')) clearAuthenticatedState();
+});
+
+window.addEventListener('storage', (event) => {
+    if ((event.key === 'nestAccessToken' || event.key === 'nestRefreshToken')
+            && !localStorage.getItem('nestAccessToken')) {
+        clearAuthenticatedState();
+    }
+});
 
 restoreSession();

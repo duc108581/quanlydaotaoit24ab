@@ -279,7 +279,7 @@ async function loadAdminRegistrations() {
                 <small>${escapeHtml(registration.sectionCode || '')} · ${escapeHtml(registration.courseName || registration.sectionName || '')} · ${escapeHtml(registration.status || 'REGISTERED')}</small></div>
                 <div class="nest-actions">
                     <button class="btn btn-success btn-sm" type="button" data-status="CONFIRMED">Duyệt</button>
-                    <button class="btn btn-danger btn-sm" type="button" data-status="CANCELLED">Từ chối</button>
+                    <button class="btn btn-danger btn-sm" type="button" data-status="REJECTED">Từ chối</button>
                 </div>`;
             item.querySelectorAll('[data-status]').forEach((button) => {
                 button.addEventListener('click', async () => {

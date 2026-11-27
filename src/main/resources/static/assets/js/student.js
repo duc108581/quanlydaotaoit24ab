@@ -14,7 +14,6 @@ const fields = [
     'cardPlace',
     'address',
     'currentAddress',
-    'academicYearYear',
     'departmentId',
     'majorId',
     'trainingProgramId',
@@ -37,7 +36,6 @@ const textToProperty = {
     cardPlace: 'cardPlace',
     address: 'address',
     currentAddress: 'currentAddress',
-    academicYearYear: 'academicYearYear',
     departmentId: 'departmentId',
     majorId: 'majorId',
     trainingProgramId: 'trainingProgramId',
@@ -82,7 +80,12 @@ function initStudentPage() {
 }
 
 async function request(url, options = {}) {
-    const response = await fetch(url, options);
+    const requestOptions = { ...options };
+    const headers = new Headers(requestOptions.headers || {});
+    const accessToken = localStorage.getItem('nestAccessToken');
+    if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
+    requestOptions.headers = headers;
+    const response = await fetch(url, requestOptions);
 
     if (!response.ok) {
         const responseText = await response.text();
@@ -93,7 +96,16 @@ async function request(url, options = {}) {
         } catch {
             // Keep the response text when the server did not return JSON.
         }
-        throw new Error(message);
+        const statusDescriptions = {
+            400: 'Dữ liệu gửi lên không hợp lệ',
+            401: 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn',
+            403: 'Tài khoản không có quyền thực hiện thao tác này',
+            500: 'Máy chủ gặp lỗi khi xử lý yêu cầu'
+        };
+        const description = statusDescriptions[response.status] || 'Yêu cầu thất bại';
+        const error = new Error(`${description} (HTTP ${response.status}): ${message}`);
+        error.status = response.status;
+        throw error;
     }
 
     if (response.status === 204) return null;
@@ -305,8 +317,8 @@ function fillStudentForm(student) {
             value = student.studentCode ?? student.code;
         }
 
-        if (id === 'academicYearYear' || id === 'admissionYear') {
-            value = value ? String(value).slice(0, 16) : '';
+        if (id === 'admissionYear') {
+            value = value == null ? '' : String(value);
         } else if (id === 'dateOfBirth' || id === 'dateOfIssue') {
             value = value ? String(value).slice(0, 10) : '';
         } else if (id === 'isActive') {
@@ -331,7 +343,9 @@ function getStudentFormData() {
         const property = textToProperty[id];
         let value = element.value.trim();
 
-        if (id === 'isActive') {
+        if (id === 'admissionYear') {
+            student[property] = value === '' ? null : Number(value);
+        } else if (id === 'isActive') {
             student[property] = value === '' ? null : value === 'true';
         } else if ([
             'departmentId',

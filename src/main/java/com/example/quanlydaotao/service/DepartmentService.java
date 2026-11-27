@@ -39,9 +39,16 @@ public class DepartmentService extends AbstractCrudService<Department> {
         if (department.getCode() == null || department.getName() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Mã và tên khoa là bắt buộc");
         }
+        if (department.getCode().length() > 100 || department.getName().length() > 255
+                || (department.getDescription() != null && department.getDescription().length() > 500)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Thông tin khoa vượt quá độ dài cho phép");
+        }
+        if (department.getEstablishedYear() != null && department.getEstablishedYear() < 1) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Năm thành lập phải là năm dương");
+        }
         boolean duplicate = currentId == null
-                ? repository.existsByCodeAndDeletedAtIsNull(department.getCode())
-                : repository.existsByCodeAndDeletedAtIsNullAndIdNot(department.getCode(), currentId);
+                ? repository.existsByCode(department.getCode())
+                : repository.existsByCodeAndIdNot(department.getCode(), currentId);
         if (duplicate) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Mã khoa đã tồn tại");
         }

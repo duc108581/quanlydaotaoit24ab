@@ -10,4 +10,6 @@ import com.example.quanlydaotao.entity.StudentClassHistory;
 public interface StudentClassHistoryRepository extends JpaRepository<StudentClassHistory, UUID> {
 
     Optional<StudentClassHistory> findFirstByStudentIdAndCurrentTrue(UUID studentId);
+
+    long countByStudentClassId(UUID studentClassId);
 }

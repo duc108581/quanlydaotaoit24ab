@@ -11,6 +11,7 @@ import { CreateRegistrationDto } from './dto/create-registration.dto';
 
 interface StudentRow {
   id: string;
+  userId: string;
 }
 
 interface SectionRow {
@@ -51,11 +52,11 @@ export class PortalService {
              cs.max_students AS maxStudents, COUNT(r.id) AS enrolled
       FROM course_sections cs
       LEFT JOIN courses c ON c.id = cs.course_id
-      LEFT JOIN student_course_sections r
+      LEFT JOIN course_registrations r
         ON r.course_section_id = cs.id
        AND r.deleted_at IS NULL
-       AND COALESCE(r.is_active, 1) = 1
-       AND LOWER(COALESCE(r.status, '')) NOT IN ('cancelled', 'dropped')
+       AND r.is_active_registration = 1
+       AND r.status IN ('REGISTERED', 'CONFIRMED')
       WHERE cs.deleted_at IS NULL
         AND COALESCE(cs.is_active, 1) = 1
         AND LOWER(COALESCE(cs.status, '')) = 'open'
@@ -102,12 +103,12 @@ export class PortalService {
 
       const duplicates = await this.database.query<IdRow>(
         `SELECT id
-         FROM student_course_sections WITH (UPDLOCK, HOLDLOCK)
+         FROM course_registrations WITH (UPDLOCK, HOLDLOCK)
          WHERE student_id = @studentId
            AND course_section_id = @sectionId
            AND deleted_at IS NULL
-           AND COALESCE(is_active, 1) = 1
-           AND LOWER(COALESCE(status, '')) NOT IN ('cancelled', 'dropped')`,
+           AND is_active_registration = 1
+           AND status IN ('REGISTERED', 'CONFIRMED')`,
         { studentId: student.id, sectionId: dto.courseSectionId },
         transaction,
       );
@@ -117,11 +118,11 @@ export class PortalService {
 
       const counts = await this.database.query<CountRow>(
         `SELECT COUNT(id) AS enrolled
-         FROM student_course_sections WITH (UPDLOCK, HOLDLOCK)
+         FROM course_registrations WITH (UPDLOCK, HOLDLOCK)
          WHERE course_section_id = @sectionId
            AND deleted_at IS NULL
-           AND COALESCE(is_active, 1) = 1
-           AND LOWER(COALESCE(status, '')) NOT IN ('cancelled', 'dropped')`,
+           AND is_active_registration = 1
+           AND status IN ('REGISTERED', 'CONFIRMED')`,
         { sectionId: dto.courseSectionId },
         transaction,
       );
@@ -132,14 +133,26 @@ export class PortalService {
         throw new ConflictException('Lớp học phần đã đủ sức chứa.');
       }
 
-      const inserted = await this.database.query<IdRow>(
-        `INSERT INTO student_course_sections
-           (id, student_id, course_section_id, registration_date, registration_type,
-            status, created_at, is_active)
-         OUTPUT INSERTED.id AS id
-         VALUES (NEWID(), @studentId, @sectionId, GETDATE(), 'first', 'REGISTERED',
-                 GETDATE(), 1)`,
+      const attempts = await this.database.query<{ nextAttempt: number }>(
+        `SELECT COALESCE(MAX(attempt_number), 0) + 1 AS nextAttempt
+         FROM course_registrations WITH (UPDLOCK, HOLDLOCK)
+         WHERE student_id = @studentId
+           AND course_section_id = @sectionId`,
         { studentId: student.id, sectionId: dto.courseSectionId },
+        transaction,
+      );
+      const inserted = await this.database.query<IdRow>(
+        `INSERT INTO course_registrations
+           (id, student_id, course_section_id, registration_date, registration_type,
+            status, attempt_number, is_active_registration, created_at, is_active)
+         OUTPUT INSERTED.id AS id
+         VALUES (NEWID(), @studentId, @sectionId, SYSUTCDATETIME(), 'FIRST', 'REGISTERED',
+                 @attemptNumber, 1, SYSUTCDATETIME(), 1)`,
+        {
+          studentId: student.id,
+          sectionId: dto.courseSectionId,
+          attemptNumber: Number(attempts[0]?.nextAttempt ?? 1),
+        },
         transaction,
       );
       const registrationId = inserted[0]?.id;
@@ -173,8 +186,8 @@ export class PortalService {
         status: string;
       }>(
         `SELECT student_id AS studentId, status
-         FROM student_course_sections WITH (UPDLOCK, HOLDLOCK)
-         WHERE id = @id AND deleted_at IS NULL AND COALESCE(is_active, 1) = 1`,
+         FROM course_registrations WITH (UPDLOCK, HOLDLOCK)
+         WHERE id = @id AND deleted_at IS NULL AND is_active = 1`,
         { id },
         transaction,
       );
@@ -193,8 +206,10 @@ export class PortalService {
         throw new ConflictException('Đăng ký này đã được hủy.');
       }
       await this.database.query(
-        `UPDATE student_course_sections
-         SET status = 'CANCELLED', updated_at = GETDATE()
+        `UPDATE course_registrations
+         SET status = 'CANCELLED',
+             is_active_registration = 0,
+             updated_at = SYSUTCDATETIME()
          WHERE id = @id`,
         { id },
         transaction,
@@ -216,17 +231,17 @@ export class PortalService {
 
   async updateRegistrationStatus(
     id: string,
-    status: 'CONFIRMED' | 'CANCELLED',
+    status: 'CONFIRMED' | 'CANCELLED' | 'REJECTED',
   ) {
     return this.database.withTransaction(async (transaction) => {
       const rows = await this.database.query<{
-        studentCode: string;
+        userId: string;
         status: string;
       }>(
-        `SELECT s.code AS studentCode, r.status
-         FROM student_course_sections r WITH (UPDLOCK, HOLDLOCK)
+        `SELECT s.user_id AS userId, r.status
+         FROM course_registrations r WITH (UPDLOCK, HOLDLOCK)
          JOIN students s ON s.id = r.student_id
-         WHERE r.id = @id AND r.deleted_at IS NULL AND COALESCE(r.is_active, 1) = 1`,
+         WHERE r.id = @id AND r.deleted_at IS NULL AND r.is_active = 1`,
         { id },
         transaction,
       );
@@ -235,19 +250,23 @@ export class PortalService {
         throw new NotFoundException('Không tìm thấy đăng ký.');
       }
       if (
-        ['CANCELLED', 'DROPPED'].includes((current.status ?? '').toUpperCase())
+        ['CANCELLED', 'DROPPED', 'REJECTED'].includes(
+          (current.status ?? '').toUpperCase(),
+        )
       ) {
         throw new ConflictException('Đăng ký đã bị hủy và không thể duyệt.');
       }
       await this.database.query(
-        `UPDATE student_course_sections
-         SET status = @status, updated_at = GETDATE()
+        `UPDATE course_registrations
+         SET status = @status,
+             is_active_registration = CASE WHEN @status = 'CONFIRMED' THEN 1 ELSE 0 END,
+             updated_at = SYSUTCDATETIME()
          WHERE id = @id`,
         { id, status },
         transaction,
       );
-      await this.addNotificationForStudentCode(
-        current.studentCode,
+      await this.addNotification(
+        current.userId,
         'Cập nhật đăng ký học phần',
         `Yêu cầu đăng ký của bạn đã được ${status === 'CONFIRMED' ? 'duyệt' : 'từ chối'}.`,
         'REGISTRATION',
@@ -291,10 +310,10 @@ export class PortalService {
     return this.database.query(`
       SELECT COUNT(DISTINCT r.student_id) AS registeredStudents,
              COUNT(r.id) AS totalRegistrations
-      FROM student_course_sections r
+      FROM course_registrations r
       WHERE r.deleted_at IS NULL
-        AND COALESCE(r.is_active, 1) = 1
-        AND LOWER(COALESCE(r.status, '')) NOT IN ('cancelled', 'dropped')
+        AND r.is_active_registration = 1
+        AND r.status IN ('REGISTERED', 'CONFIRMED')
     `);
   }
 
@@ -312,10 +331,10 @@ export class PortalService {
       FROM course_sections cs
       LEFT JOIN (
         SELECT course_section_id, COUNT(id) AS enrolled
-        FROM student_course_sections
+        FROM course_registrations
         WHERE deleted_at IS NULL
-          AND COALESCE(is_active, 1) = 1
-          AND LOWER(COALESCE(status, '')) NOT IN ('cancelled', 'dropped')
+          AND is_active_registration = 1
+          AND status IN ('REGISTERED', 'CONFIRMED')
         GROUP BY course_section_id
       ) r ON r.course_section_id = cs.id
       WHERE cs.deleted_at IS NULL
@@ -331,11 +350,11 @@ export class PortalService {
       SELECT cs.id, cs.code, cs.name, cs.max_students AS maxStudents,
              COUNT(r.id) AS enrolled
       FROM course_sections cs
-      LEFT JOIN student_course_sections r
+      LEFT JOIN course_registrations r
         ON r.course_section_id = cs.id
        AND r.deleted_at IS NULL
-       AND COALESCE(r.is_active, 1) = 1
-       AND LOWER(COALESCE(r.status, '')) NOT IN ('cancelled', 'dropped')
+       AND r.is_active_registration = 1
+       AND r.status IN ('REGISTERED', 'CONFIRMED')
       WHERE cs.deleted_at IS NULL
       GROUP BY cs.id, cs.code, cs.name, cs.max_students
       ORDER BY cs.code
@@ -361,16 +380,13 @@ export class PortalService {
   }
 
   private async requireStudent(user: AuthUser): Promise<StudentRow> {
-    if (!user.studentCode) {
-      throw new ForbiddenException('Tài khoản chưa liên kết hồ sơ sinh viên.');
-    }
     const students = await this.database.query<StudentRow>(
-      `SELECT id
+      `SELECT id, user_id AS userId
        FROM students
-       WHERE LOWER(code) = LOWER(@studentCode)
+       WHERE user_id = @userId
          AND deleted_at IS NULL
          AND COALESCE(is_active, 1) = 1`,
-      { studentCode: user.studentCode },
+      { userId: user.id },
     );
     if (!students[0]) {
       throw new ForbiddenException(
@@ -390,12 +406,12 @@ export class PortalService {
              s.code AS studentCode, s.full_name AS studentName,
              cs.code AS sectionCode, cs.name AS sectionName,
              c.name AS courseName
-      FROM student_course_sections r
+      FROM course_registrations r
       JOIN students s ON s.id = r.student_id
       JOIN course_sections cs ON cs.id = r.course_section_id
       LEFT JOIN courses c ON c.id = cs.course_id
       WHERE r.deleted_at IS NULL
-        AND COALESCE(r.is_active, 1) = 1
+        AND r.is_active = 1
         AND (${predicate})
       ORDER BY r.registration_date DESC
     `;
@@ -411,26 +427,10 @@ export class PortalService {
   ) {
     await this.database.query(
       `INSERT INTO notifications (id, user_id, title, content, type, created_at)
-       VALUES (NEWID(), @userId, @title, @content, @type, GETDATE())`,
+       VALUES (NEWID(), @userId, @title, @content, @type, SYSUTCDATETIME())`,
       { userId, title, content, type },
       transaction,
     );
   }
 
-  private async addNotificationForStudentCode(
-    studentCode: string,
-    title: string,
-    content: string,
-    type: string,
-    transaction: Transaction,
-  ) {
-    await this.database.query(
-      `INSERT INTO notifications (id, user_id, title, content, type, created_at)
-       SELECT NEWID(), id, @title, @content, @type, GETDATE()
-       FROM users
-       WHERE LOWER(student_code) = LOWER(@studentCode) AND is_active = 1`,
-      { studentCode, title, content, type },
-      transaction,
-    );
-  }
 }

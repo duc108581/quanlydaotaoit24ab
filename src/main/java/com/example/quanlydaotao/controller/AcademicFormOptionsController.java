@@ -50,4 +50,13 @@ public class AcademicFormOptionsController {
             ORDER BY code
             """);
     }
+
+    @GetMapping("/grading-scales")
+    public List<Map<String, Object>> getGradingScales() {
+        return jdbcTemplate.queryForList("""
+            SELECT id, code, name, scale_status AS status
+            FROM grading_scales
+            ORDER BY code, version_no DESC
+            """);
+    }
 }

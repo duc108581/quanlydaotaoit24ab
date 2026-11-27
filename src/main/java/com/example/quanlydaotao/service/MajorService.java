@@ -42,12 +42,21 @@ public class MajorService extends AbstractCrudService<Major> {
         if (major.getCode() == null || major.getName() == null || major.getDepartmentId() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Mã, tên ngành và khoa là bắt buộc");
         }
+        if (major.getCode().length() > 50 || major.getName().length() > 255
+                || (major.getDescription() != null && major.getDescription().length() > 500)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Thông tin ngành vượt quá độ dài cho phép");
+        }
+        if (major.getEffectiveDate() != null && major.getExpiryDate() != null
+                && major.getExpiryDate().isBefore(major.getEffectiveDate())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Ngày hết hiệu lực phải sau ngày hiệu lực");
+        }
         departmentRepository.findByIdAndDeletedAtIsNull(major.getDepartmentId())
                 .filter(department -> !Boolean.FALSE.equals(department.getIsActive()))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Khoa không tồn tại hoặc đã ngừng hoạt động"));
         boolean duplicate = currentId == null
-                ? repository.existsByCodeAndDeletedAtIsNull(major.getCode())
-                : repository.existsByCodeAndDeletedAtIsNullAndIdNot(major.getCode(), currentId);
+                ? repository.existsByDepartmentIdAndCode(major.getDepartmentId(), major.getCode())
+                : repository.existsByDepartmentIdAndCodeAndIdNot(
+                        major.getDepartmentId(), major.getCode(), currentId);
         if (duplicate) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Mã ngành đã tồn tại");
         }

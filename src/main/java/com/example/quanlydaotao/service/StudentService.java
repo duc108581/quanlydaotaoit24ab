@@ -136,14 +136,16 @@ public class StudentService {
         student.setCode(student.getCode().trim().toUpperCase(Locale.ROOT));
         student.setFullName(student.getFullName().trim());
         if (student.getEmail() != null) {
-            student.setEmail(student.getEmail().trim().toLowerCase(Locale.ROOT));
+            String email = student.getEmail().trim().toLowerCase(Locale.ROOT);
+            student.setEmail(email.isEmpty() ? null : email);
         }
         if (student.getPhone() != null) {
             student.setPhone(student.getPhone().trim());
         }
         if (creating && student.getUserId() == null) {
             UUID userId = accountProvisioningService.createAccount(
-                    student.getCode(), student.getFullName(), student.getInitialPassword(), List.of("STUDENT"));
+                    student.getCode(), student.getFullName(), student.getEmail(),
+                    student.getInitialPassword(), List.of("STUDENT"));
             student.setUserId(userId);
         }
         student.setInitialPassword(null);
@@ -159,6 +161,7 @@ public class StudentService {
                   AND account.is_active = 1
                   AND assigned.code = N'STUDENT'
                   AND assigned.is_active = 1
+                  AND assignedRole.revoked_at IS NULL
                 """, Integer.class, student.getUserId());
         if (accountCount == null || accountCount != 1) {
             throw new ResponseStatusException(
@@ -166,6 +169,7 @@ public class StudentService {
         }
         student.setUpdatedAt(now);
         Student savedStudent = studentRepository.save(student);
+        accountProvisioningService.updateAccountEmail(savedStudent.getUserId(), savedStudent.getEmail());
         if (Boolean.FALSE.equals(savedStudent.getIsActive())) {
             deactivateAccount(savedStudent.getUserId(), now);
         }
@@ -308,7 +312,7 @@ public class StudentService {
         if (previous != null && Objects.equals(previous.getStudentClassessId(), student.getStudentClassessId())) {
             return;
         }
-        StudentClass studentClass = studentClassRepository.findByIdAndDeletedAtIsNull(student.getStudentClassessId())
+        StudentClass studentClass = studentClassRepository.findByIdAndDeletedAtIsNullForUpdate(student.getStudentClassessId())
                 .filter(item -> !Boolean.FALSE.equals(item.getIsActive()))
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.BAD_REQUEST, "Lớp sinh viên không tồn tại hoặc đã ngừng hoạt động"));

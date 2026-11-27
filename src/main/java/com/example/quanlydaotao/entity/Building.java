@@ -8,10 +8,10 @@ import jakarta.persistence.Table;
 @Table(name = "buildings")
 public class Building extends AuditedEntity {
 
-    @Column(name = "code")
+    @Column(name = "code", length = 50, nullable = false)
     private String code;
 
-    @Column(name = "name")
+    @Column(name = "name", length = 255, nullable = false)
     private String name;
 
     public String getCode() { return code; }

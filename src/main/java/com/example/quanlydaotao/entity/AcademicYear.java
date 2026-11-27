@@ -10,10 +10,10 @@ import jakarta.persistence.Table;
 @Table(name = "academic_years")
 public class AcademicYear extends AuditedEntity {
 
-    @Column(name = "code", length = 100)
+    @Column(name = "code", length = 100, nullable = false)
     private String code;
 
-    @Column(name = "name", length = 100)
+    @Column(name = "name", length = 100, nullable = false)
     private String name;
 
     @Column(name = "\"year\"", length = 20)
